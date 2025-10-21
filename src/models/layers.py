@@ -148,6 +148,11 @@ class CategoricalTokenizer(torch.nn.Module):  # noqa: F811
         empty = _empty(expected_inputs, empty)
         _expected_inputs = {}
         for categorie in map(str, categories):
+            try: 
+                expected_inputs[categorie]
+            except:
+                from IPython import embed
+                embed()
             data = expected_inputs[categorie]
             data.append(empty)
             _expected_inputs[categorie] = data
@@ -270,8 +275,13 @@ class CategoricalTokenizer(torch.nn.Module):  # noqa: F811
         # shift input array by their respective minimum and slice translation accordingly
         # map to int to be used as indices
         # from IPython import embed; embed(header="CAT - 271 in layers.py ")
+    
+        
         shifted = (x - self.min).to(torch.int32)
-        output = self.map[self.indices, shifted]
+        try:
+            output = self.map[self.indices, shifted]
+        except:
+            from IPython import embed;embed(header=" string - 280 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/models/layers.py")
         return output
 
 class CatEmbeddingLayer(torch.nn.Module):  # noqa: F811

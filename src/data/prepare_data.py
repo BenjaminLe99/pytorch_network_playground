@@ -9,8 +9,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-
-def awkward_to_torch(array, columns, dtype):
+def awkward_to_torch(array, columns, dtype, merge_pids=True):
     array = torch.from_numpy(np.stack([array[col].to_numpy() for col in columns], axis=1))
     if dtype is not None:
         array = array.to(dtype)
@@ -62,7 +61,6 @@ def get_sum_of_weights(array):
 
 def prepare_data(datasets, eras, input_columns, target_columns, dtype=torch.float32, file_type="root", split_index=None):
 
-
     events = load_data(
         datasets,
         eras,
@@ -70,29 +68,27 @@ def prepare_data(datasets, eras, input_columns, target_columns, dtype=torch.floa
         columns=input_columns,
         )
 
-    events = filter_datasets(events)
     # convert to torch tensors and create EraDatasets objects
     EraDatasetManager = EraDatasetSampler(None, batch_size=1024*4, split_index=split_index)
-    for dataset_type, (era_pid) in events.items():
-        for (era, process_id), arr in era_pid.items():
+    for (era, dataset_type, process_id), arr in events.items():
+        # from IPython import embed; embed(header="RR - 273 in load_data.py ")
+        arr = ak.concatenate(arr)
+        inputs = awkward_to_torch(arr, input_columns, dtype)
+        target = awkward_to_torch(arr, target_columns, dtype)
+        weight = torch.tensor(ak.sum(arr.normalization_weight), dtype = dtype)
+        era_dataset = EraDataset(
+            inputs=inputs,
+            target=target ,
+            weight=weight ,
+            name=process_id,
+            era=era,
+            dataset_type=dataset_type,
+        )
+        EraDatasetManager.add_dataset(era_dataset)
+        logger.info(f"Add {dataset_type} pid: {process_id} of era: {era}")
 
-
-            # from IPython import embed; embed(header="RR - 273 in load_data.py ")
-            inputs = awkward_to_torch(arr, input_columns, dtype)
-            target = awkward_to_torch(arr, target_columns, dtype)
-            weight = torch.tensor(ak.sum(arr.normalization_weight), dtype = dtype)
-            era_dataset = EraDataset(
-                inputs=inputs,
-                target=target ,
-                weight=weight ,
-                name=process_id,
-                era=era,
-                dataset_type=dataset_type,
-            )
-            EraDatasetManager.add_dataset(era_dataset)
-            logger.info(f"Add dataset {process_id} of era {era}")
-
-        EraDatasetManager.calculate_sample_size(dataset_type=dataset_type, min_size=5)
+    for ds_type in list(set([dataset_type for (era, dataset_type, process_id) in events.keys()])):
+        EraDatasetManager.calculate_sample_size(dataset_type=ds_type, min_size=5)
     return EraDatasetManager
 
 if __name__ == "__main__":

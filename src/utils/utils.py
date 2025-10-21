@@ -5,15 +5,12 @@ from collections.abc import Iterable
 
 from copy import deepcopy
 
-EMPTY_INT = -9999
-EMPTY_FLOAT = -9999.0
+EMPTY_INT = -99999
+EMPTY_FLOAT = -99999.0
 
 import torch
 import numpy as np
 import awkward as ak
-import onnx
-import onnxruntime as rt
-
 
 # def expand_columns(columns: Container[str]) -> list[Route]:
 #     final_set = set()
@@ -65,159 +62,23 @@ def normalized_weight_decay(
         print(f"Normalize weight decay by number of parameters: {decay_factor}")
     return {"params": no_weight_decay, "weight_decay": 0.0}, {"params": with_weight_decay, "weight_decay": decay_factor}
 
-
 embedding_expected_inputs = {
-    "pair_type": [0, 1, 2],  # see mapping below
-    "decay_mode1": [-1, 0, 1, 10, 11],  # -1 for e/mu
-    "decay_mode2": [0, 1, 10, 11],
-    "lepton1.charge": [-1, 1, 0],
-    "lepton2.charge": [-1, 1, 0],
-    "has_fatjet": [0, 1],  # whether a selected fatjet is present
-    "has_jet_pair": [0, 1],  # whether two or more jets are present
+    "res_dnn_pnet_pair_type": [0, 1, 2],  # see mapping below
+    "res_dnn_pnet_dm1": [-1, 0, 1, 10, 11],  # -1 for e/mu
+    "res_dnn_pnet_dm2": [0, 1, 10, 11],
+    "res_dnn_pnet_vis_tau1_charge": [-1, 1, 0],
+    "res_dnn_pnet_vis_tau2_charge": [-1, 1, 0],
+    "res_dnn_pnet_has_fatjet": [0, 1],  # whether a selected fatjet is present
+    "res_dnn_pnet_has_jet_pair": [0, 1],  # whether two or more jets are present
     # 0: 2016APV, 1: 2016, 2: 2017, 3: 2018, 4: 2022preEE, 5: 2022postEE, 6: 2023pre, 7: 2023post
-    "year_flag": [0, 1, 2, 3, 4, 5, 6, 7],
-    "channel_id": [1, 2, 3],
+    "res_dnn_pnet_year_flag": [0, 1, 2, 3, 4, 5, 6, 7],
+    "res_dnn_pnet_channel_id": [1, 2, 3],
 }
 
 def clip_gradients(parameters: Iterable[torch.nn.Parameter], clip_value: float = 1.0):
     for p in parameters:
         p.register_hook(lambda grad: torch.clamp(grad, -clip_value, clip_value))
 
-
-
-def export_ensemble_onnx(
-    ensemble_wrapper,
-    categoricat_tensor: torch.Tensor,
-    continous_tensor: torch.Tensor,
-    save_dir: str,
-    opset_version: int = None,
-) -> str:
-    """
-    Wrapper to export an ensemble model to onnx format. Does the same as export_onnx, but
-    iterates over all models in the ensemble_wrapper and freezes them before exporting.
-
-    Args:
-        ensemble_wrapper (MLEnsembleWrapper): _description_
-        categoricat_tensor (torch.tensor): tensor representing categorical features
-        continous_tensor (torch.tensor): tensor representing categorical features
-        save_dir (str): directory where the onnx model will be saved.
-        opset_version (int, optional): version of the used operation sets. Defaults to None.
-
-    Returns:
-        str: The path of the saved onnx ensemble model.
-    """
-    for model in ensemble_wrapper.models:
-        model.eval()
-        for param in model.parameters():
-            param.requires_grad = False
-
-    export_onnx(
-        ensemble_wrapper,
-        categoricat_tensor,
-        continous_tensor,
-        save_dir,
-        opset_version=opset_version,
-    )
-
-
-def export_onnx(
-    model: torch.nn.Module,
-    categoricat_tensor: torch.Tensor,
-    continous_tensor: torch.Tensor,
-    save_dir: str,
-    opset_version: int = None,
-) -> str:
-    """
-    Function to export a loaded pytorch *model* to onnx format saved in *save_dir*.
-    To successfully export the model, the input tensors *categoricat_tensor* and *continous_tensor* must be provided.
-    For backwards compatibility, an opset_version can be enforced.
-    A table about which opsets are available can be found here: https://onnxruntime.ai/docs/reference/compatibility.html
-    Some operations are only available in newer opsets, or change behavior inbetween version.
-    A list of all operations and their versions is given at: https://onnx.ai/onnx/operators/
-
-    Args:
-        model (torch.nn.model): loaded Pytorch model, ready to perform inference.
-        categoricat_tensor (torch.tensor): tensor representing categorical features
-        continous_tensor (torch.tensor): tensor representing categorical features
-        save_dir (str): directory where the onnx model will be saved.
-        opset_version (int, optional): version of the used operation sets. Defaults to None.
-
-    Returns:
-        str: The path of the saved onnx model.
-    """
-
-    # logger = law.logger.get_logger(__name__)
-
-    onnx_version = onnx.__version__
-    runtime_version = rt.__version__
-    torch_version = torch.__version__
-
-    save_path = f"{save_dir}-onnx_{onnx_version}-rt_{runtime_version}-torch{torch_version}.onnx"
-
-    # prepare export
-    num_cat_features = categoricat_tensor.shape[-1]
-    num_cont_features = continous_tensor.shape[-1]
-
-    # cast to proper format, numpy and float32
-    categoricat_tensor = categoricat_tensor.numpy().astype(np.float32).reshape(-1, num_cat_features)
-    continous_tensor = continous_tensor.numpy().astype(np.float32).reshape(-1, num_cont_features)
-
-    # double bracket is necessary since onnx, and our model unpacks the input tuple
-    input_feed = ((categoricat_tensor, continous_tensor),)
-
-    torch.onnx.export(
-        model,
-        input_feed,
-        save_path,
-        input_names=["cat", "cont"],
-        output_names=["output"],
-        # if opset is none highest available will be used
-
-        opset_version=opset_version,
-        do_constant_folding=True,
-        dynamic_axes={
-            # enable dynamic batch sizes
-            "cat": {0: "batch_size"},
-            "cont": {0: "batch_size"},
-            "output": {0: "batch_size"},
-        },
-    )
-
-    # logger.info(f"Succefully exported onnx model to {save_path}")
-    return save_path
-
-
-def test_run_onnx(
-    model_path: str,
-    categorical_array: np.ndarray,
-    continous_array: np.ndarray,
-) -> np.ndarray:
-    """
-    Function to run a test inference on a given *model_path*.
-    The *categorical_array* and *continous_array* are expected to be given as numpy arrays.
-
-    Args:
-        model_path (str): Model path to onnx model
-        categorical_array (np.ndarray): Array of categorical features
-        continous_array (np.ndarray): Array of continous features
-
-    Returns:
-        np.ndarray: Prediction of the model
-    """
-    sess = rt.InferenceSession(model_path, providers=rt.get_available_providers())
-    first_node = sess.get_inputs()[0]
-    second_node = sess.get_inputs()[1]
-
-    # setup data
-    input_feed = {
-        first_node.name: categorical_array.reshape(-1, first_node.shape).astype(np.float32),
-        second_node.name: continous_array.reshape(-1, second_node.shape).astype(np.float32),
-    }
-
-    output_name = [output.name for output in sess.get_outputs()]
-
-    onnx_predition = sess.run(output_name, input_feed)
-    return onnx_predition
 
 
 def get_standardization_parameter(

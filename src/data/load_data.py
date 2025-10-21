@@ -6,12 +6,15 @@ import os
 import pathlib
 from typing import Union
 from collections import defaultdict
-import torch.utils.data as t_data
 
-from src.data.utils import depthCount
-from src.utils.logger import get_logger
+from data.utils import depthCount
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+def add_meta_fields(columns):
+    meta_fields = ["process_id"]
+    return columns + meta_fields
 
 def find_datasets(dataset_patterns: str, year_patterns: str, file_type: str="root"):
     """
@@ -48,14 +51,12 @@ def find_datasets(dataset_patterns: str, year_patterns: str, file_type: str="roo
             datasets = list(pathlib.Path(data_dir).glob(f"{year}/{dataset_patter}"))
 
             if len(datasets) == 0:
-                logger.warning(f"skip {year} due to 0 datasets")
-                continue
+                raise ValueError(f"dataset pattern {dataset_patter} for {year} resulted in 0 datasets")
 
             for dataset in datasets:
                 files = list(map(str, pathlib.Path(dataset).glob(file_pattern)))
                 if len(files) == 0:
-                    logger.warning(f"skip {dataset.name} due to 0 files")
-                    break
+                    raise ValueError(f"{dataset.name} has 0 files")
                 size = round(sum(os.path.getsize(f) for f in files) / (1024**2),2)
                 logger.info(f"+{len(files)} files | size {size} MB | {year}/{dataset.name}")
                 data[year][dataset.name] = files
@@ -77,13 +78,17 @@ def root_to_awkward(files_path: Union[list[str],str], branches: Union[list[str],
     if depthCount(branches) > 1 and branches is not None:
         raise ValueError("branches must be a flat list")
 
+    branches = add_meta_fields(branches)
+
     if isinstance(files_path, str):
         files_path = [files_path]
     arrays = []
     for file_path in files_path:
         with uproot.open(file_path) as file:
             tree = file["events"]
+            # from IPython import embed; embed(header="string - 85 in load_data.py ")
             arrays.append(tree.arrays(branches, library="ak"))
+    # from IPython import embed; embed(header="string - 93 in load_data.py ")
     return ak.concatenate(arrays, axis=0)
 
 def parquet_to_awkward(files_path: Union[list[str],str], columns: Union[list[str], str, None]=None) -> ak.Array:
@@ -119,13 +124,11 @@ def get_loader(file_type: str, **kwargs):
     Returns:
         func: loader function, configuration dictionary
     """
-    match file_type:
-        case "root":
-            return root_to_awkward, {"branches": kwargs.get("columns", None)}
-        case "parquet":
-            return parquet_to_awkward, {"columns": kwargs.get("columns", None)}
-        case _:
-            raise ValueError(f"Unknown file type: {file_type}")
+    if file_type == "root":
+        return root_to_awkward, {"branches": kwargs.get("columns", None)}
+    elif "parquet":
+        return parquet_to_awkward, {"columns": kwargs.get("columns", None)}
+    else: raise ValueError(f"Unknown file type: {file_type}")
 
 
 def load_data(dataset_patter: str, year_pattern: str, file_type: str="root", columns: Union[list[str],str, None]=None):
@@ -140,7 +143,7 @@ def load_data(dataset_patter: str, year_pattern: str, file_type: str="root", col
         columns (list[str], str, optional): columns that should be lodead e.g. ["events", "run"]. If None loads all columns . Defaults to None.
 
     Returns:
-        _type_: _description_
+        dict: {year:{pid: List(Ids)}}
     """
     target_map = {"hh" : 0, "dy": 1, "tt": 2}
     era_map = {"22pre": 0, "22post": 1, "23pre": 2, "23post": 3}
@@ -152,9 +155,8 @@ def load_data(dataset_patter: str, year_pattern: str, file_type: str="root", col
 
     loader, config = get_loader(file_type, columns=list(columns))
     datasets = find_datasets(dataset_patter, year_pattern, file_type)
-    data = {}
+    data = defaultdict(list)
     for year, year_data in datasets.items():
-        data[year] = {}
         # add events with structure {dataset_name : events}
         for dataset, files in year_data.items():
             # load inputs
@@ -170,9 +172,24 @@ def load_data(dataset_patter: str, year_pattern: str, file_type: str="root", col
             era_array = np.full(len(events), era_map[year], np.int32)
             events = ak.with_field(events, era_array, "era")
 
-            data[year][dataset] = events
-            logger.info(f"{len(events)} events for {year}/{dataset}")
+            # filter by process_id if necessary and save, otherwise save by dataset
+            p_arrays = filter_by_process_id(events)
+            for pid, p_array in p_arrays.items():
+                data[(year,dataset[:2],pid)].append(p_array)
+                logger.info(f"{year} | {dataset} | PID: {pid} | {len(p_array)}")
     return data
+
+
+def filter_by_process_id(array):
+    # events of structure {year:{dataset : array}}
+    pids = array["process_id"]
+    unique_ids = np.unique(pids.to_numpy())
+    p_array = {}
+    for uid in unique_ids:
+        mask = pids == uid
+        p_array[int(uid)] = array[mask]
+    return p_array
+
 
 if __name__ == "__main__":
     # test load_data

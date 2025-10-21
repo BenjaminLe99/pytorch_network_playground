@@ -94,29 +94,29 @@ def expand(str_list):
 # ])
 
 categorical_features: list[str] = [
-    "res_dnn_pnet_pair_type",
-    "res_dnn_pnet_dm1",
-    "res_dnn_pnet_dm2",
-    "res_dnn_pnet_vis_tau1_charge",
-    "res_dnn_pnet_vis_tau2_charge",
-    "res_dnn_pnet_has_jet_pair",
-    "res_dnn_pnet_has_fatjet",
+    "pair_type",
+    "dm1",
+    "dm2",
+    "vis_tau1_charge",
+    "vis_tau2_charge",
+    "has_jet_pair",
+    "has_fatjet",
 ]
 # continuous input features to the network
 continous_features: list[str] = [
-    "res_dnn_pnet_met_px", "res_dnn_pnet_met_py",
-    "res_dnn_pnet_met_cov00", "res_dnn_pnet_met_cov01", "res_dnn_pnet_met_cov11",
-    "res_dnn_pnet_vis_tau1_px", "res_dnn_pnet_vis_tau1_py", "res_dnn_pnet_vis_tau1_pz", "res_dnn_pnet_vis_tau1_e",
-    "res_dnn_pnet_vis_tau2_px", "res_dnn_pnet_vis_tau2_py", "res_dnn_pnet_vis_tau2_pz", "res_dnn_pnet_vis_tau2_e",
-    "res_dnn_pnet_bjet1_px", "res_dnn_pnet_bjet1_py", "res_dnn_pnet_bjet1_pz", "res_dnn_pnet_bjet1_e",
-    "res_dnn_pnet_bjet1_tag_b", "res_dnn_pnet_bjet1_tag_cvsb", "res_dnn_pnet_bjet1_tag_cvsl", "res_dnn_pnet_bjet1_hhbtag",
-    "res_dnn_pnet_bjet2_px", "res_dnn_pnet_bjet2_py", "res_dnn_pnet_bjet2_pz", "res_dnn_pnet_bjet2_e",
-    "res_dnn_pnet_bjet2_tag_b", "res_dnn_pnet_bjet2_tag_cvsb", "res_dnn_pnet_bjet2_tag_cvsl", "res_dnn_pnet_bjet2_hhbtag",
-    "res_dnn_pnet_fatjet_px", "res_dnn_pnet_fatjet_py", "res_dnn_pnet_fatjet_pz", "res_dnn_pnet_fatjet_e",
-    "res_dnn_pnet_htt_e", "res_dnn_pnet_htt_px", "res_dnn_pnet_htt_py", "res_dnn_pnet_htt_pz",
-    "res_dnn_pnet_hbb_e", "res_dnn_pnet_hbb_px", "res_dnn_pnet_hbb_py", "res_dnn_pnet_hbb_pz",
-    "res_dnn_pnet_htthbb_e", "res_dnn_pnet_htthbb_px", "res_dnn_pnet_htthbb_py", "res_dnn_pnet_htthbb_pz",
-    "res_dnn_pnet_httfatjet_e", "res_dnn_pnet_httfatjet_px", "res_dnn_pnet_httfatjet_py", "res_dnn_pnet_httfatjet_pz",
+    "met_px", "met_py",
+    "met_cov00", "met_cov01", "met_cov11",
+    "vis_tau1_px", "vis_tau1_py", "vis_tau1_pz", "vis_tau1_e",
+    "vis_tau2_px", "vis_tau2_py", "vis_tau2_pz", "vis_tau2_e",
+    "bjet1_px", "bjet1_py", "bjet1_pz", "bjet1_e",
+    "bjet1_tag_b", "bjet1_tag_cvsb", "bjet1_tag_cvsl", "bjet1_hhbtag",
+    "bjet2_px", "bjet2_py", "bjet2_pz", "bjet2_e",
+    "bjet2_tag_b", "bjet2_tag_cvsb", "bjet2_tag_cvsl", "bjet2_hhbtag",
+    "fatjet_px", "fatjet_py", "fatjet_pz", "fatjet_e",
+    "htt_e", "htt_px", "htt_py", "htt_pz",
+    "hbb_e", "hbb_px", "hbb_py", "hbb_pz",
+    "htthbb_e", "htthbb_px", "htthbb_py", "htthbb_pz",
+    "httfatjet_e", "httfatjet_px", "httfatjet_py", "httfatjet_pz",
 ]
 
 

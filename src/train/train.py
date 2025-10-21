@@ -1,5 +1,5 @@
 import torch
-from utils import utils
+#from utils import utils
 from models import layers, create_model
 from data import extract_features, prepare_data
 
@@ -9,7 +9,7 @@ continous_features = [data_prefix + f for f in extract_features.continous_featur
 categorical_features = [data_prefix + f for f in extract_features.categorical_features]
 
 # datasets = ["dy_*","tt_dl*", "hh_ggf_hbb_htt_kl0_kt1*"]
-datasets = ["dy_*","tt_dl*", "hh_ggf_hbb_htt_kl0_kt1*"]
+datasets = ["dy_m50toinf_amcatnlo","tt_dl*", "hh_ggf_hbb_htt_kl0_kt1*"]
 # eras = ["22pre", "22post", "23pre", "23post"]
 eras = ["22pre"]
 
@@ -73,7 +73,7 @@ sampler = prepare_data.prepare_data(
     split_index=len(continous_features)
 )
 
-from IPython import embed; embed(header="Before Training")
+#from IPython import embed; embed(header="Before Training")
 for iteration in range(max_iteration):
     # from IPython import embed; embed(header="string - 65 in train.py ")
     optimizer.zero_grad()
@@ -91,7 +91,7 @@ for iteration in range(max_iteration):
     if iteration % LOG_INTERVAL == 0:
         print(f"Step {iteration} Loss: {loss.item():.4f}")
 
-from IPython import embed; embed(header="END - 89 in train.py ")
+#from IPython import embed; embed(header="END - 89 in train.py ")
 
 def torch_export(model, dst_path, input_tensors):
     from pathlib import Path
