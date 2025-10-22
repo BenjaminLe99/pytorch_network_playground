@@ -34,6 +34,7 @@ setup_env() {
         return 1
     fi
     # Show only the last part of the virtualenv path (env name) in the prompt
+    export PYTHONPATH=$(pwd)/src
     echo "Ready to go"
     export SETUP_COMPLETE=1
 }

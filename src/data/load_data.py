@@ -1,6 +1,7 @@
 
 import numpy as np
 import awkward as ak
+import torch
 import uproot
 import os
 import pathlib
@@ -9,6 +10,7 @@ from collections import defaultdict
 
 from data.utils import depthCount
 from utils.logger import get_logger
+from data.datasets import EraDataset, EraDatasetSampler
 
 logger = get_logger(__name__)
 
@@ -110,7 +112,6 @@ def parquet_to_awkward(files_path: Union[list[str],str], columns: Union[list[str
         arrays.append(ak.from_parquet(file_path, columns=columns))
     return ak.concatenate(arrays, axis=0)
 
-
 def get_loader(file_type: str, **kwargs):
     """
     Small helper function to get the correct loader function and its configuration based on the file type.
@@ -130,8 +131,17 @@ def get_loader(file_type: str, **kwargs):
         return parquet_to_awkward, {"columns": kwargs.get("columns", None)}
     else: raise ValueError(f"Unknown file type: {file_type}")
 
+def get_cache_path(config=None):
+    import hashlib
+    import os
+    import pathlib
+    h = tuple(config.items())
+    h = hashlib.sha256(str(h).encode("utf-8")).hexdigest()[:10]
+    cache_dir = pathlib.Path(os.environ["CACHE_DIR"]).with_name(h)
+    return cache_dir
 
-def load_data(dataset_patter: str, year_pattern: str, file_type: str="root", columns: Union[list[str],str, None]=None):
+
+def load_data(datasets, file_type: str="root", columns: Union[list[str],str, None]=None):
     """
     Loads data with given *file_type* in given a *dataset_pattern* and *year_pattern*. If only certain columns are needed, they can be specified in *columns*.
     The data sorted by year and dataset name is returned as a nested dictionary in awkward format.
@@ -154,7 +164,6 @@ def load_data(dataset_patter: str, year_pattern: str, file_type: str="root", col
         columns.add("normalization_weight")
 
     loader, config = get_loader(file_type, columns=list(columns))
-    datasets = find_datasets(dataset_patter, year_pattern, file_type)
     data = defaultdict(list)
     for year, year_data in datasets.items():
         # add events with structure {dataset_name : events}
@@ -174,11 +183,15 @@ def load_data(dataset_patter: str, year_pattern: str, file_type: str="root", col
 
             # filter by process_id if necessary and save, otherwise save by dataset
             p_arrays = filter_by_process_id(events)
+
             for pid, p_array in p_arrays.items():
                 data[(year,dataset[:2],pid)].append(p_array)
                 logger.info(f"{year} | {dataset} | PID: {pid} | {len(p_array)}")
+    logger.info(f"starting merging of PIDs")
+    # merge over pids
+    for uid, arrays in data.items():
+        data[uid] = ak.concatenate(arrays)
     return data
-
 
 def filter_by_process_id(array):
     # events of structure {year:{dataset : array}}
@@ -190,15 +203,119 @@ def filter_by_process_id(array):
         p_array[int(uid)] = array[mask]
     return p_array
 
+def get_data(config, save_cache = True):
+    import pickle
+    # find cache if exists and recreate sample with this
+    # else prepare data if not cache exist
+    cache_path = get_cache_path(config=config)
+    # when cache exist load it and return the data
+    if cache_path.exists():
+        logger.info("Loading cache")
+        with open(cache_path, "rb") as file:
+            events = pickle.load(file)
+    else:
+        logger.info("Prepare Loading of data:")
+        events = load_data(
+            config["datasets"],
+            file_type = "root",
+            columns = config["continous_features"] + config["categorical_features"]
+        )
+        # save events in cache
+        if save_cache:
+            logger.info(f"Saving cache at {cache_path}:")
+            with open(f"{cache_path}", "wb") as file:
+                pickle.dump(events, file, protocol=pickle.HIGHEST_PROTOCOL)
+        logger.info("Done loading data")
+    return events
 
-if __name__ == "__main__":
-    # test load_data
-    datasets = ["dy_m50toinf_*j_amcatnlo","tt_dl*"]
-    eras = ["22pre", "23pre"]
-    input_columns = ["event", "process_id"]
-    target_columns = ["target"]
-    events = load_data(datasets, eras, file_type="root", columns=input_columns)
-    print(events)
-    print()
-    print(events["22pre"]["dy_m50toinf_0j_amcatnlo"].fields)
-    from IPython import embed; embed(header="Test Load Data")
+
+def awkward_to_torch(array, columns, dtype, merge_pids=True):
+    array = torch.from_numpy(np.stack([array[col].to_numpy() for col in columns], axis=1))
+    if dtype is not None:
+        array = array.to(dtype)
+    return array
+
+
+def filter_datasets(
+    events: dict[dict[ak.Array]],
+    feature: str="process_id"
+    ) -> dict[dict[ak.Array]]:
+    """
+    Filter *events* by apply mask to *feature* and returns an dictionary of structure {year: {feature: array}}
+
+    Args:
+        events (dict[dict[ak.Array]]): events of structure {year:{dataset : array}}
+
+    Returns:
+        return dict[dict[ak.Array]]: events of structure {dataset_type: {(year,feature): array}}
+    """
+
+    # events of structure {year:{dataset : array}}
+    arrays_per_year_per_feature = defaultdict(dict)
+    for year, datasets in events.items():
+        array_per_feature_collection = defaultdict(list)
+        for dataset, array in datasets.items():
+            # get unique features, filter array by feature and store in collection
+            # {feature : array[feature_mask]}
+            for unique_feature in np.unique(array[feature].to_numpy()):
+                feature_mask = array[feature] == unique_feature
+                filtered_array = array[feature_mask]
+                array_per_feature_collection[(int(unique_feature), dataset[:2])].append(filtered_array)
+
+        # return array with structure {dataset_type: {(year,feature): array}}
+        for (_feature, dataset_type), list_of_arrays in array_per_feature_collection.items():
+            array = ak.concatenate(list_of_arrays)
+            logger.info(f"{year} | {_feature} | {len(array)} events")
+            arrays_per_year_per_feature[dataset_type][(year,_feature)] = array
+    return arrays_per_year_per_feature
+
+
+def get_sum_of_weights(array):
+    # era : {process_id : arrray}
+    weights = {}
+    for year, pid in array.items():
+        weights[year] = {}
+        for process_id, arr in pid.items():
+            weights[year][process_id] = ak.sum(arr.normalization_weight)
+    return weights
+
+def create_sampler(events, input_columns, dtype=torch.float32, min_size=1):
+    # convert to torch tensors and create EraDatasets objects
+    EraDatasetManager = EraDatasetSampler(None, batch_size=1024*4, min_size=min_size)
+    for (era, dataset_type, process_id), arr in events.items():
+        arr = ak.concatenate(arr)
+        inputs = awkward_to_torch(arr, input_columns, dtype)
+        target = awkward_to_torch(arr, ["target"], dtype)
+        weight = torch.tensor(ak.sum(arr.normalization_weight), dtype = dtype)
+        era_dataset = EraDataset(
+            inputs=inputs,
+            target=target ,
+            weight=weight ,
+            name=process_id,
+            era=era,
+            dataset_type=dataset_type,
+        )
+        EraDatasetManager.add_dataset(era_dataset)
+        logger.info(f"Add {dataset_type} pid: {process_id} of era: {era}")
+
+    for ds_type in list(set([dataset_type for (era, dataset_type, process_id) in events.keys()])):
+        EraDatasetManager.calculate_sample_size(dataset_type=ds_type)
+    return EraDatasetManager
+
+
+def get_std_statistics(events):
+    def weighted_average(means, weights):
+        return sum(weights * weights) / sum(weights)
+    # filter data after processes
+    keys_per_process = defaultdict(list)
+    for uid in events.keys():
+        (era, ds_type, pid) = uid
+        keys_per_process[ds_type].append(uid)
+    from IPython import embed; embed(header="string - 308 in load_data.py ")
+
+
+    means, stds = [],[]
+    for ds_type, uid in keys_per_process.items():
+        for (era, ds_type, pid), array in events[uid]:
+            pass
+        # arr = events[]
