@@ -8,9 +8,9 @@ import torch
 
 def init_layers(continous_features, categorical_features, config):
     # increasing eps helps to stabilize training to counter batch norm and L2 reg counterplay when used together.
-    eps = 0.5e-5
+    eps = config["eps"]
     # activate weight normalization on linear layer weights
-    normalize = False
+    normalize = config["linear_layer_normalization"]
 
     # helper where all layers are defined
     # std layers are filled when statitics are known
@@ -26,7 +26,7 @@ def init_layers(continous_features, categorical_features, config):
     input_layer = InputLayer(
         continuous_inputs=continous_features,
         categorical_inputs=categorical_features,
-        embedding_dim=4,
+        embedding_dim=config["embedding_dim"],
         expected_categorical_inputs=embedding_expected_inputs,
         empty=config["empty_value"],
         std_layer=std_layer,
@@ -38,7 +38,7 @@ def init_layers(continous_features, categorical_features, config):
 
     resnet_blocks = [
         ResNetPreactivationBlock(config["nodes"], config["activation_functions"], config["skip_connection_init"], config["freeze_skip_connection"], eps=eps, normalize=normalize)
-        for num_blocks in range(4)
+        for num_blocks in range(config["num_resblocks"])
         ]
 
     model = torch.nn.Sequential(
