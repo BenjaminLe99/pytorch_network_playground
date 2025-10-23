@@ -61,7 +61,7 @@ class EraDatasetSampler(t_data.Sampler):
         datasets=None,
         batch_size=1,
         sample_ratio={"dy": 0.25, "tt": 0.25, "hh": 0.5},
-        split_index = None,
+        min_size = None,
         ):
         self.total_weight = {"dy":0, "tt":0, "hh":0}
         self.datasets = defaultdict(dict)  # {dataset_type: {(era, process_id): dataset}}
@@ -71,7 +71,7 @@ class EraDatasetSampler(t_data.Sampler):
             for dataset in datasets:
                 self.add_dataset(dataset)
         self.sample_ratio = sample_ratio
-        self.split_index = split_index # index where to split continous and categorical data
+        self.min_size = min_size # index where to split continous and categorical data
 
     def add_dataset(self, dataset):
         # {era : process_id: {array}}
@@ -90,7 +90,7 @@ class EraDatasetSampler(t_data.Sampler):
                 total_batch += ds.sample_size
             logger.info(f"\tsum/expected: {total_batch}/{(self.sample_ratio[ds.dataset_type] * self.batch_size).item()}")
 
-    def calculate_sample_size(self, dataset_type, min_size=1, dry=False):
+    def calculate_sample_size(self, dataset_type, dry=False):
         logger.info(f"Calculate sample sizes for: {dataset_type}")
         # from IPython import embed; embed(header="string - 84 in datasets.py ")
         # unpack and convert to tensors for easier handling, get desired_sub_batch_size
@@ -99,7 +99,7 @@ class EraDatasetSampler(t_data.Sampler):
             weights.append(ds.weight.item())
             keys.append((era, pid))
         weights = torch.tensor(weights, dtype=torch.float32)
-        min_size = torch.tensor(min_size)
+        min_size = torch.tensor(self.min_size)
         sub_batch_size = int(self.batch_size * self.sample_ratio[dataset_type])
 
         # start algorithm
@@ -137,9 +137,16 @@ class EraDatasetSampler(t_data.Sampler):
         # define mask for floor and ceil
         # median -> even: under median so idx len/2 - 1 (change mask to inclusive)
         # median -> uneven: exact middle idx len/2
-        median = floored_oveflow_idx.median()
-        below_median = floored_oveflow_idx < median
-        above_median = floored_oveflow_idx >= median
+
+        # even uneven median treatment
+        if len(floored_oveflow_idx) % 2 == 0:
+            median = floored_oveflow_idx.median()
+            below_median = floored_oveflow_idx <= median
+            above_median = floored_oveflow_idx > median
+        else:
+            median = floored_oveflow_idx.median()
+            below_median = floored_oveflow_idx < median
+            above_median = floored_oveflow_idx >= median
 
         # apply floor and ceil for targets below and above median
         floored_overflow_sizes[below_median] = torch.floor(floored_overflow_sizes[below_median])
@@ -163,6 +170,7 @@ class EraDatasetSampler(t_data.Sampler):
         elif very_last_remaining == 1:
             floored_sizes[indices_above_threshold[-1]] -= 1
         elif very_last_remaining != 0:
+            from IPython import embed; embed(header=f"{floored_sizes.sum()} but should be {sub_batch_size}")
             raise ValueError(f"Resampling failed: Created batch size of size: {floored_sizes.sum()} but should be {sub_batch_size}")
 
         # store batch size per phase space in dataset

@@ -7,7 +7,7 @@ from functools import partial
 
 from collections.abc import Container
 
-from utils import Route, EMPTY_FLOAT, EMPTY_INT
+from utils import EMPTY_FLOAT, EMPTY_INT
 
 
 import numpy as np
@@ -15,7 +15,7 @@ import awkward as ak
 import abc
 import torch
 
-from loss import WeightedCrossEntropy, FocalLoss
+# from loss import WeightedCrossEntropy, FocalLoss
 from utils import (
 embedding_expected_inputs, get_standardization_parameter, normalized_weight_decay
 )
@@ -89,14 +89,14 @@ class NetworkBase(abc.ABC, torch.nn.Module):
     def num_features(self):
         return self.num_cat + self.num_cont
 
-    @classmethod
-    def _process_columns(cls, columns: Container[str]) -> list[Route]:
-        final_set = set()
-        final_set.update(*list(map(Route, law.util.brace_expand(obj)) for obj in columns))
-        return sorted(final_set, key=str)
+    # @classmethod
+    # def _process_columns(cls, columns: Container[str]):
+    #     final_set = set()
+    #     final_set.update(*list(map(Route, law.util.brace_expand(obj)) for obj in columns))
+    #     return sorted(final_set, key=str)
 
     @property
-    def inputs(self) -> list[Route]:
+    def inputs(self):
         """
         Combines continuous and categorical features and removed duplicated..
         Returns a list of Route objects.

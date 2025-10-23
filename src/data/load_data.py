@@ -167,8 +167,10 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
     data = defaultdict(list)
     for year, year_data in datasets.items():
         # add events with structure {dataset_name : events}
+        max_ = 0
         for dataset, files in year_data.items():
             # load inputs
+            max_ +=1
             events = loader(files, **config)
 
             # add target by dataset name, first 2 letters define the target
@@ -185,12 +187,22 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
             p_arrays = filter_by_process_id(events)
 
             for pid, p_array in p_arrays.items():
+                print(pid, p_array)
                 data[(year,dataset[:2],pid)].append(p_array)
                 logger.info(f"{year} | {dataset} | PID: {pid} | {len(p_array)}")
+            if max_ == 3:
+                break
+
     logger.info(f"starting merging of PIDs")
     # merge over pids
-    for uid, arrays in data.items():
-        data[uid] = ak.concatenate(arrays)
+    from IPython import embed; embed(header="string - 193 in load_data.py ")
+    for uid in data.keys():
+        # arrays = data.pop(uid)
+        arrays = data[uid]
+        print(uid, arrays)
+        ak.concatenate(arrays)
+        # data[uid] = ak.concatenate(arrays)
+
     return data
 
 def filter_by_process_id(array):

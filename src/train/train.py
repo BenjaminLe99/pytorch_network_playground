@@ -1,19 +1,22 @@
 import torch
 #from utils import utils
 from models import layers, create_model
-from data import extract_features, prepare_data
+from data import extract_features
+from data.load_data import get_data, find_datasets, create_sampler
 
 # load data
-data_prefix = "res_dnn_pnet_"
-continous_features = [data_prefix + f for f in extract_features.continous_features]
-categorical_features = [data_prefix + f for f in extract_features.categorical_features]
+# eras = ["22pre", "22post", "23pre", "23post"] if not debugging else ["22pre"]
+eras = ["22pre", "22post"]
+datasets = find_datasets(["dy_*","tt_*", "hh_ggf_hbb_htt_kl0_kt1*"], eras, "root")
+debugging = False
 
-# datasets = ["dy_*","tt_dl*", "hh_ggf_hbb_htt_kl0_kt1*"]
-datasets = ["dy_m50toinf_amcatnlo","tt_dl*", "hh_ggf_hbb_htt_kl0_kt1*"]
-# eras = ["22pre", "22post", "23pre", "23post"]
-eras = ["22pre"]
-
-target_columns = ["target"]
+dataset_config = {
+    "min_events":3,
+    "continous_features" : extract_features.continous_features if not debugging else extract_features.continous_features[:2],
+    "categorical_features": extract_features.categorical_features if not debugging else extract_features.categorical_features[:2],
+    "eras" : eras,
+    "datasets" : datasets,
+}
 
 # config of network
 layer_config = {
@@ -27,13 +30,22 @@ layer_config = {
 }
 
 config = {
+
     "lr":1e2,
     "gamma":0.9,
     "label_smoothing":0,
 }
+from IPython import embed; embed(header="string - 39 in train.py ")
+events = get_data(dataset_config)
+sampler = create_sampler(
+    events,
+    input_columns=dataset_config["continous_features"] + dataset_config["categorical_features"],
+    dtype=torch.float32,
+    min_size=3,
+)
 
-# from IPython import embed; embed(header="string - 8 in train.py ")
-models_input_layer, model = create_model.init_layers(continous_features, categorical_features, config=layer_config)
+
+models_input_layer, model = create_model.init_layers(dataset_config["continous_features"], dataset_config["categorical_features"], config=layer_config)
 max_iteration = 10
 # training loop:
 model.train()
@@ -63,15 +75,13 @@ running_loss = 0.0
 
 #### PREPARE DATA
 
-sampler = prepare_data.prepare_data(
-    datasets,
-    eras,
-    continous_features + categorical_features,
-    target_columns,
-    dtype=torch.float32,
-    file_type="root",
-    split_index=len(continous_features)
-)
+# sampler = prepare_data.prepare_data(
+#     find_datasets(dataset_config["dataset_pattern"], dataset_config["eras"], "root"),
+#     dataset_config["continous_features"] + dataset_config["categorical_features"],
+#     dtype=torch.float32,
+#     file_type="root",
+#     min_size=dataset_config["min_events"],
+# )
 
 #from IPython import embed; embed(header="Before Training")
 for iteration in range(max_iteration):
@@ -80,7 +90,7 @@ for iteration in range(max_iteration):
 
     inputs, targets = sampler.get_batch()
     inputs, targets = inputs.to(device), targets.to(device)
-    continous_inputs, categorical_input = inputs[:, :len(continous_features)], inputs[:, len(continous_features):]
+    continous_inputs, categorical_input = inputs[:, :len(dataset_config["continous_features"])], inputs[:, len(dataset_config["continous_features"]):]
     pred = model((categorical_input,continous_inputs))
 
     loss = loss_fn(pred, targets.reshape(-1,3))
