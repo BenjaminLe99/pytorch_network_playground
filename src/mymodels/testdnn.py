@@ -1,26 +1,27 @@
 import torch
 #from utils import utils
 from models import layers, create_model
-from data import extract_features, prepare_data
+from data import extract_features, load_data
+
 
 # comments on the current ml runs
-
 print("=======================================================")
 print("Reminder: Currently using only 1 dy dataset for testing")
 print("=======================================================")
 
 # load data
-data_prefix = "res_dnn_pnet_"
-continous_features = [data_prefix + f for f in extract_features.continous_features]
-categorical_features = [data_prefix + f for f in extract_features.categorical_features]
 
-datasets = ["dy_m50toinf_amcatnlo","tt_dl*", "hh_ggf_hbb_htt_kl0_kt1*"]
+debugging = False
 eras = ["22pre"]
+datasets = load_data.find_datasets(["dy_m50toinf_amcatnlo","tt_dl*", "hh_ggf_hbb_htt_kl0_kt1*"], eras, "root")
 
-# datasets = ["dy_*","tt_dl*", "hh_ggf_hbb_htt_kl0_kt1*"]
-# eras = ["22pre", "22post", "23pre", "23post"]
-
-target_columns = ["target"]
+dataset_config = {
+    "min_events":3,
+    "continous_features" : extract_features.continous_features if not debugging else extract_features.continous_features[:2],
+    "categorical_features": extract_features.categorical_features if not debugging else extract_features.categorical_features[:2],
+    "eras" : eras,
+    "datasets" : datasets,
+}
 
 # config of network
 layer_config = {
@@ -44,7 +45,15 @@ config = {
     "L2": 0,
 }
 
-models_input_layer, model = create_model.init_layers(continous_features, categorical_features, config=layer_config)
+events = load_data.get_data(dataset_config)
+sampler = load_data.create_sampler(
+    events,
+    input_columns=dataset_config["continous_features"] + dataset_config["categorical_features"],
+    dtype=torch.float32,
+    min_size=3,
+)
+
+models_input_layer, model = create_model.init_layers(dataset_config["continous_features"], dataset_config["categorical_features"], config=layer_config)
 max_iteration = 100
 
 # training loop:
@@ -60,32 +69,9 @@ loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothi
 CPU = torch.device("cpu")
 CUDA = torch.device("cuda")
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    # loss = loss_fn(pred, target)
-    # from IPython import embed; embed(header="string - 614 in bognet.py ")
-    # loss.backward()
-    # optimizer.first_step(zero_grad=True)
-
-    # # second forward step with disabled bachnorm running stats in second forward step
-    # disable_running_stats(model)
-    # pred_2 = self(categorical_x, continous_x)
-    # loss_fn(pred_2, target).backward()
-    # optimizer.second_step(zero_grad=True)
 LOG_INTERVAL = 10
 model.train()
 running_loss = 0.0
-
-#### PREPARE DATA
-
-sampler = prepare_data.prepare_data(
-    datasets,
-    eras,
-    continous_features + categorical_features,
-    target_columns,
-    dtype=torch.float32,
-    file_type="root",
-    split_index=len(continous_features)
-)
-
 
 for iteration in range(max_iteration):
 
@@ -93,7 +79,7 @@ for iteration in range(max_iteration):
 
     inputs, targets = sampler.get_batch()
     inputs, targets = inputs.to(device), targets.to(device)
-    continous_inputs, categorical_input = inputs[:, :len(continous_features)], inputs[:, len(continous_features):]
+    continous_inputs, categorical_input = inputs[:, :len(dataset_config["continous_features"])], inputs[:, len(dataset_config["continous_features"]):]
     pred = model((categorical_input,continous_inputs))
 
     loss = loss_fn(pred, targets.reshape(-1,3))

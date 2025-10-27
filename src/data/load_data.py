@@ -88,9 +88,7 @@ def root_to_awkward(files_path: Union[list[str],str], branches: Union[list[str],
     for file_path in files_path:
         with uproot.open(file_path) as file:
             tree = file["events"]
-            # from IPython import embed; embed(header="string - 85 in load_data.py ")
             arrays.append(tree.arrays(branches, library="ak"))
-    # from IPython import embed; embed(header="string - 93 in load_data.py ")
     return ak.concatenate(arrays, axis=0)
 
 def parquet_to_awkward(files_path: Union[list[str],str], columns: Union[list[str], str, None]=None) -> ak.Array:
@@ -195,7 +193,6 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
 
     logger.info(f"starting merging of PIDs")
     # merge over pids
-    from IPython import embed; embed(header="string - 193 in load_data.py ")
     for uid in data.keys():
         # arrays = data.pop(uid)
         arrays = data[uid]
@@ -323,8 +320,6 @@ def get_std_statistics(events):
     for uid in events.keys():
         (era, ds_type, pid) = uid
         keys_per_process[ds_type].append(uid)
-    from IPython import embed; embed(header="string - 308 in load_data.py ")
-
 
     means, stds = [],[]
     for ds_type, uid in keys_per_process.items():
