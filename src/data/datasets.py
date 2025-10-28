@@ -8,28 +8,29 @@ logger = get_logger(__name__)
 class EraDataset(t_data.Dataset):
     def __init__(
         self,
-        inputs: torch.Tensor,
+        continous_tensor: torch.Tensor,
+        categorical_tensor: torch.Tensor,
         target: torch.Tensor,
         weight: torch.Tensor=None,
         name: str=None,
         era: str=None,
         dataset_type: str=None,
     ):
-        self.inputs = inputs
+        self.continous_input = continous_tensor
+        self.categorical_input = categorical_tensor
         self.targets = target
         self.weight = weight
         self.name = name
         self.era = era
-        self.size = len(self)
         self.reset()
         self.dataset_type = dataset_type
         self.sample_size = None
 
     def __len__(self):
-        return len(self.inputs)
+        return self.targets.shape[0]
 
     def __getitem__(self, idx):
-        return self.data[idx], self.targets[idx]
+        return self.continous_input[idx], self.continous_input[idx], self.targets[idx]
 
     def reset(self):
         self.current_idx = 0
@@ -39,7 +40,7 @@ class EraDataset(t_data.Dataset):
         if number is None:
             number = self.sample_size
 
-        if number > len(self.inputs):
+        if number > len(self):
             raise ValueError(f"Cannot sample {number} elements from dataset of size {len(self)}")
 
         start_idx = self.current_idx
@@ -48,9 +49,12 @@ class EraDataset(t_data.Dataset):
 
         idx = self.indices[start_idx:next_idx]
         # reset if we reached the end of the dataset and drop last incomplete batch
-        data = self.inputs[idx], self.targets[idx]
+        try:
+            data = self.continous_input[idx], self.categorical_input[idx],self.targets[idx]
+        except:
+            from IPython import embed; embed(header="string - 55 in datasets.py ")
         self.current_idx = next_idx
-        if self.current_idx == len(self.inputs):
+        if self.current_idx >= len(self):
             self.reset()
         return data
 
@@ -78,6 +82,17 @@ class EraDatasetSampler(t_data.Sampler):
         weight = dataset.weight
         self.total_weight[dataset.dataset_type] += weight
         self.datasets[dataset.dataset_type][(dataset.era, dataset.name)] = dataset
+
+    @property
+    def keys(self):
+        return list(self.datasets.keys())
+
+    @property
+    def sample_sizes(self):
+        _sample_sizes = []
+        for ds_type in self.keys:
+            _sample_sizes = _sample_sizes + [ds.sample_size for ds in self.datasets[ds_type]]
+        return _sample_sizes
 
     def print_sample_rates(self):
         logger.info(f"Sample rate for Dataset of Era")
@@ -165,10 +180,10 @@ class EraDatasetSampler(t_data.Sampler):
         # if one still mismatch add it on lowest or remove from highest
         very_last_remaining = int(floored_sizes.sum()) - sub_batch_size
         # from IPython import embed; embed(header="string - 144 in datasets.py ")
-        if very_last_remaining == -1:
-            floored_sizes[indices_above_threshold[0]] += 1
-        elif very_last_remaining == 1:
-            floored_sizes[indices_above_threshold[-1]] -= 1
+        if very_last_remaining <= -1:
+            floored_sizes[indices_above_threshold[0]] += very_last_remaining
+        elif very_last_remaining >= 1:
+            floored_sizes[indices_above_threshold[-1]] -= very_last_remaining
         elif very_last_remaining != 0:
             from IPython import embed; embed(header=f"{floored_sizes.sum()} but should be {sub_batch_size}")
             raise ValueError(f"Resampling failed: Created batch size of size: {floored_sizes.sum()} but should be {sub_batch_size}")
@@ -190,19 +205,22 @@ class EraDatasetSampler(t_data.Sampler):
 
         # shuffle finished batch optionally
         # Get a batch of data from each dataset
-        batch_input = []
-        batch_target = []
-        # from IPython import embed; embed(header="GETBATCH - 66 in datasets.py ")
-        for dataset_type, uid in self.datasets.items():
-            for key, ds in uid.items():
-                input, target = ds.sample()
-                batch_input.append(input)
-                batch_target.append(target)
+        batch_cont, batch_cat, batch_target = [], [], []
 
-        batch_input = torch.concatenate(batch_input, dim=0)
+        # from IPython import embed; embed(header="GETBATCH - 66 in datasets.py ")
+        for _, uid in self.datasets.items():
+            for ds in uid.values():
+                cont, cat, target = ds.sample()
+                batch_cont.append(cont), batch_cat.append(cat), batch_target.append(target)
+
+        batch_cont = torch.concatenate(batch_cont, dim=0)
+        batch_cat = torch.concatenate(batch_cat, dim=0)
         batch_target = torch.concatenate(batch_target, dim=0)
+
         if shuffle_batch:
-            indices = torch.randperm(len(batch_input))
-            batch_input = batch_input[indices]
+            # needs to be depending on data due to last incomplete batch
+            indices = torch.randperm(batch_cont.shape[0])
+            batch_cont = batch_cont[indices]
+            batch_cat = batch_cat[indices]
             batch_target = batch_target[indices]
-        return batch_input, batch_target
+        return batch_cont, batch_cat, batch_target

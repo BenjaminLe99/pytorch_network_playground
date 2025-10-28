@@ -1,19 +1,24 @@
 import torch
 #from utils import utils
 from models import layers, create_model
-from data import extract_features
-from data.load_data import get_data, find_datasets, create_sampler
+from data import features
+from data.load_data import get_data, find_datasets, create_sampler, get_batch_statistics
+
+
+CPU = torch.device("cpu")
+CUDA = torch.device("cuda")
+DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 # load data
-# eras = ["22pre", "22post", "23pre", "23post"] if not debugging else ["22pre"]
-eras = ["22pre", "22post"]
+eras = ["22pre", "22post", "23pre", "23post"]
+era_map = {"22pre": 0, "22post": 1, "23pre": 2, "23post": 3}
 datasets = find_datasets(["dy_*","tt_*", "hh_ggf_hbb_htt_kl0_kt1*"], eras, "root")
 debugging = False
 
 dataset_config = {
     "min_events":3,
-    "continous_features" : extract_features.continous_features if not debugging else extract_features.continous_features[:2],
-    "categorical_features": extract_features.categorical_features if not debugging else extract_features.categorical_features[:2],
+    "continous_features" : features.continous_features if not debugging else features.continous_features[:2],
+    "categorical_features": features.categorical_features if not debugging else features.categorical_features[:2],
     "eras" : eras,
     "datasets" : datasets,
 }
@@ -31,67 +36,58 @@ layer_config = {
 
 config = {
 
-    "lr":1e2,
+    "lr":1e-2,
     "gamma":0.9,
     "label_smoothing":0,
 }
-from IPython import embed; embed(header="string - 39 in train.py ")
-events = get_data(dataset_config)
+
+
+events = get_data(dataset_config, overwrite=False)
+layer_config["mean"],layer_config["std"] = get_batch_statistics(events, padding_value=-99999)
+
+
+
 sampler = create_sampler(
     events,
-    input_columns=dataset_config["continous_features"] + dataset_config["categorical_features"],
-    dtype=torch.float32,
+    target_map = {"hh" : 0, "dy": 1, "tt": 2},
     min_size=3,
 )
+from IPython import embed; embed(header="string - 50 in train.py ")
 
 
-models_input_layer, model = create_model.init_layers(dataset_config["continous_features"], dataset_config["categorical_features"], config=layer_config)
-max_iteration = 10
+
 # training loop:
-model.train()
 # TODO: use split of parameters
+models_input_layer, model = create_model.init_layers(dataset_config["continous_features"], dataset_config["categorical_features"], config=layer_config)
 optimizer = torch.optim.AdamW(model.parameters(), lr=config["lr"])
 scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer, gamma=config["gamma"])
-
+model = model.to(DEVICE)
 # HINT: requires only logits, no softmax at end
 loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
 
-CPU = torch.device("cpu")
-CUDA = torch.device("cuda")
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    # loss = loss_fn(pred, target)
-    # from IPython import embed; embed(header="string - 614 in bognet.py ")
-    # loss.backward()
-    # optimizer.first_step(zero_grad=True)
+# loss = loss_fn(pred, target)
+# from IPython import embed; embed(header="string - 614 in bognet.py ")
+# loss.backward()
+# optimizer.first_step(zero_grad=True)
 
-    # # second forward step with disabled bachnorm running stats in second forward step
-    # disable_running_stats(model)
-    # pred_2 = self(categorical_x, continous_x)
-    # loss_fn(pred_2, target).backward()
-    # optimizer.second_step(zero_grad=True)
+# # second forward step with disabled bachnorm running stats in second forward step
+# disable_running_stats(model)
+# pred_2 = self(categorical_x, continous_x)
+# loss_fn(pred_2, target).backward()
+# optimizer.second_step(zero_grad=True)
+max_iteration = 100
 LOG_INTERVAL = 10
 model.train()
 running_loss = 0.0
 
-#### PREPARE DATA
-
-# sampler = prepare_data.prepare_data(
-#     find_datasets(dataset_config["dataset_pattern"], dataset_config["eras"], "root"),
-#     dataset_config["continous_features"] + dataset_config["categorical_features"],
-#     dtype=torch.float32,
-#     file_type="root",
-#     min_size=dataset_config["min_events"],
-# )
-
-#from IPython import embed; embed(header="Before Training")
 for iteration in range(max_iteration):
-    # from IPython import embed; embed(header="string - 65 in train.py ")
     optimizer.zero_grad()
 
-    inputs, targets = sampler.get_batch()
-    inputs, targets = inputs.to(device), targets.to(device)
-    continous_inputs, categorical_input = inputs[:, :len(dataset_config["continous_features"])], inputs[:, len(dataset_config["continous_features"]):]
-    pred = model((categorical_input,continous_inputs))
+    cont, cat, targets = sampler.get_batch()
+    targets = targets.to(torch.float32)
+    cont, cat, targets = cont.to(DEVICE), cat.to(DEVICE), targets.to(DEVICE)
+
+    pred = model((cat,cont))
 
     loss = loss_fn(pred, targets.reshape(-1,3))
     loss.backward()
@@ -101,31 +97,4 @@ for iteration in range(max_iteration):
     if iteration % LOG_INTERVAL == 0:
         print(f"Step {iteration} Loss: {loss.item():.4f}")
 
-#from IPython import embed; embed(header="END - 89 in train.py ")
-
-def torch_export(model, dst_path, input_tensors):
-    from pathlib import Path
-    model.eval()
-
-    cat, con = input_tensors
-
-    # HINT: input is chosen since model takes a tuple of inputs, normally name of inputs is used
-    dim = torch.export.dynamic_shapes.Dim.AUTO
-    dynamic_shapes = {
-        "input": ((dim, cat.shape[-1]), (dim, con[-1]))
-    }
-
-    exp = torch.export.export(
-        model,
-        args=((categorical_input, continous_inputs),),
-        dynamic_shapes=dynamic_shapes,
-    )
-
-    p = Path(f"{dst_path}").with_suffix(".pt2")
-    torch.export.save(exp, p)
-
-
-def run_exported_tensor_model(pt2_path, input_tensors):
-    exp = torch.export.load(pt2_path)
-    scores = exp.module()(input_tensors)
-    return scores
+from IPython import embed; embed(header="END - 89 in train.py ")

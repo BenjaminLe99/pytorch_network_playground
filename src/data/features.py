@@ -22,6 +22,7 @@ data_prefix = "res_dnn_pnet_"
 
 categorical_features: list[str] = [
     "pair_type",
+    # "channel_id",
     "dm1",
     "dm2",
     "vis_tau1_charge",

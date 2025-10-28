@@ -4,6 +4,7 @@ import awkward as ak
 import torch
 import uproot
 import os
+import pickle
 import pathlib
 from typing import Union
 from collections import defaultdict
@@ -11,12 +12,15 @@ from collections import defaultdict
 from data.utils import depthCount
 from utils.logger import get_logger
 from data.datasets import EraDataset, EraDatasetSampler
+from data.cache import DataCacher
 
 logger = get_logger(__name__)
 
 def add_meta_fields(columns):
-    meta_fields = ["process_id"]
-    return columns + meta_fields
+    meta_fields = {"process_id", "normalization_weight"}
+    columns = set(columns)
+    columns = columns.union(meta_fields)
+    return columns
 
 def find_datasets(dataset_patterns: str, year_patterns: str, file_type: str="root"):
     """
@@ -64,7 +68,7 @@ def find_datasets(dataset_patterns: str, year_patterns: str, file_type: str="roo
                 data[year][dataset.name] = files
     return data
 
-def root_to_awkward(files_path: Union[list[str],str], branches: Union[list[str], str, None]=None) -> ak.Array:
+def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], str, None]=None) -> ak.Array:
     """
     Load all root files in *files_path* and return them as a single awkward array.
     If only certain branches are needed, they can be specified in *branches*.
@@ -86,10 +90,10 @@ def root_to_awkward(files_path: Union[list[str],str], branches: Union[list[str],
         files_path = [files_path]
     arrays = []
     for file_path in files_path:
-        with uproot.open(file_path) as file:
+        with uproot.open(file_path, object_cache=None, array_cache=None) as file:
             tree = file["events"]
-            arrays.append(tree.arrays(branches, library="ak"))
-    return ak.concatenate(arrays, axis=0)
+            arrays.append(tree.arrays(branches, library="ak").to_numpy())
+    return np.concatenate(arrays, axis=0)
 
 def parquet_to_awkward(files_path: Union[list[str],str], columns: Union[list[str], str, None]=None) -> ak.Array:
     """
@@ -123,20 +127,13 @@ def get_loader(file_type: str, **kwargs):
     Returns:
         func: loader function, configuration dictionary
     """
-    if file_type == "root":
-        return root_to_awkward, {"branches": kwargs.get("columns", None)}
-    elif "parquet":
-        return parquet_to_awkward, {"columns": kwargs.get("columns", None)}
-    else: raise ValueError(f"Unknown file type: {file_type}")
-
-def get_cache_path(config=None):
-    import hashlib
-    import os
-    import pathlib
-    h = tuple(config.items())
-    h = hashlib.sha256(str(h).encode("utf-8")).hexdigest()[:10]
-    cache_dir = pathlib.Path(os.environ["CACHE_DIR"]).with_name(h)
-    return cache_dir
+    match file_type:
+        case "root":
+            return root_to_numpy, {"branches": kwargs.get("columns", None)}
+        case "parquet":
+            return parquet_to_awkward, {"columns": kwargs.get("columns", None)}
+        case _:
+            raise ValueError(f"Unknown file type: {file_type}")
 
 
 def load_data(datasets, file_type: str="root", columns: Union[list[str],str, None]=None):
@@ -153,97 +150,130 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
     Returns:
         dict: {year:{pid: List(Ids)}}
     """
-    target_map = {"hh" : 0, "dy": 1, "tt": 2}
-    era_map = {"22pre": 0, "22post": 1, "23pre": 2, "23post": 3}
-    num_targets = len(target_map.keys())
-    # add weights for resampling
-    columns = set(columns)
-    if "normalization_weight" not in columns:
-        columns.add("normalization_weight")
+
+    def filter_by_process_id(array):
+        # events of structure {year:{dataset : array}}
+        pids = array["process_id"]
+        unique_ids = np.unique(pids)
+        p_array = {}
+        for uid in unique_ids:
+            mask = pids == uid
+            p_array[int(uid)] = array[mask]
+        return tuple(p_array.items())
+
+    def load_data_per_process_id(loader, datasets, config):
+        from numpy.lib.recfunctions import append_fields
+        data = {}
+        for year, year_data in datasets.items():
+            # add events with structure {dataset_name : events}
+            for dataset, files in year_data.items():
+                # load inputs
+                events = loader(files, **config)
+
+                # filter by process_id if necessary and save, otherwise save by dataset
+                p_arrays = filter_by_process_id(events)
+                for pid, p_array in p_arrays:
+                    uid = (year,dataset[:2],pid)
+                    if uid not in data:
+                        data[uid] = []
+                    data[uid].append(p_array)
+                    logger.info(f"{year} | {dataset} | PID: {pid} | {len(p_array)}")
+        return data
+
+    def merge_per_pid(data):
+        # replace_with_concatenated_from_buffers(data, axis=0)
+        keys = list(data.keys())
+        for i, uid in enumerate(keys):
+            print(i, uid)
+            arrays = data.pop(uid)
+            concat = np.concatenate(arrays, axis=0)
+            data[uid] = concat
+        return data
 
     loader, config = get_loader(file_type, columns=list(columns))
-    data = defaultdict(list)
-    for year, year_data in datasets.items():
-        # add events with structure {dataset_name : events}
-        max_ = 0
-        for dataset, files in year_data.items():
-            # load inputs
-            max_ +=1
-            events = loader(files, **config)
-
-            # add target by dataset name, first 2 letters define the target
-            target_value = target_map[dataset[:2]]
-            target_array = np.zeros((len(events), num_targets))
-            target_array[:, target_value] = 1
-            events = ak.with_field(events, target_array, "target")
-
-            # add era encoding:
-            era_array = np.full(len(events), era_map[year], np.int32)
-            events = ak.with_field(events, era_array, "era")
-
-            # filter by process_id if necessary and save, otherwise save by dataset
-            p_arrays = filter_by_process_id(events)
-
-            for pid, p_array in p_arrays.items():
-                print(pid, p_array)
-                data[(year,dataset[:2],pid)].append(p_array)
-                logger.info(f"{year} | {dataset} | PID: {pid} | {len(p_array)}")
-            if max_ == 3:
-                break
-
-    logger.info(f"starting merging of PIDs")
-    # merge over pids
-    for uid in data.keys():
-        # arrays = data.pop(uid)
-        arrays = data[uid]
-        print(uid, arrays)
-        ak.concatenate(arrays)
-        # data[uid] = ak.concatenate(arrays)
-
+    data = load_data_per_process_id(loader, datasets, config)
+    data = merge_per_pid(data)
     return data
 
-def filter_by_process_id(array):
-    # events of structure {year:{dataset : array}}
-    pids = array["process_id"]
-    unique_ids = np.unique(pids.to_numpy())
-    p_array = {}
-    for uid in unique_ids:
-        mask = pids == uid
-        p_array[int(uid)] = array[mask]
-    return p_array
-
-def get_data(config, save_cache = True):
-    import pickle
+def get_data(config, _save_cache = True, overwrite=False):
     # find cache if exists and recreate sample with this
     # else prepare data if not cache exist
-    cache_path = get_cache_path(config=config)
+
+    cacher = DataCacher(config=config)
+
     # when cache exist load it and return the data
-    if cache_path.exists():
-        logger.info("Loading cache")
-        with open(cache_path, "rb") as file:
-            events = pickle.load(file)
+    if not overwrite:
+        events = cacher.load_cache()
     else:
         logger.info("Prepare Loading of data:")
+        cont_feat, cat_feat = config["continous_features"], config["categorical_features"]
+        # load the data in {pid : awkward}
         events = load_data(
             config["datasets"],
             file_type = "root",
-            columns = config["continous_features"] + config["categorical_features"]
+            columns = cont_feat + cat_feat
         )
-        # save events in cache
-        if save_cache:
-            logger.info(f"Saving cache at {cache_path}:")
-            with open(f"{cache_path}", "wb") as file:
-                pickle.dump(events, file, protocol=pickle.HIGHEST_PROTOCOL)
+        # conver data in {pid : {cont:arr, cat: arr, weight: arr, target: arr}}
+        events = convert_numpy_to_torch(
+            events=events,
+            continous_features=cont_feat,
+            categorical_features=cat_feat,
+        )
         logger.info("Done loading data")
+        # save events in cache
+        if _save_cache:
+            try:
+                cacher.save_cache(events)
+            except:
+                from IPython import embed; embed(header="Saving Cache did not work out - going debugging to manually save \'events\' with \'cacher.save_cache\'")
     return events
 
+def convert_numpy_to_torch(events, continous_features, categorical_features, dtype=None):
+    def numpy_to_torch(array, columns, dtype):
+        array = torch.from_numpy(np.stack([array[col] for col in columns], axis=1))
+        if dtype is not None:
+            array = array.to(dtype)
+        return array
 
-def awkward_to_torch(array, columns, dtype, merge_pids=True):
-    array = torch.from_numpy(np.stack([array[col].to_numpy() for col in columns], axis=1))
-    if dtype is not None:
-        array = array.to(dtype)
-    return array
+    def filter_nan_mask(array, features, uid):
+        masks = []
+        for f in features:
+            mask = np.isnan(array[f])
+            masks.append(mask)
+        event_mask = np.logical_or.reduce(masks)
+        num_filter = np.sum(event_mask)
+        if num_filter:
+            logger.info(f"Filter {num_filter} Nans out form {uid}")
+        return ~event_mask
 
+
+    for uid in list(events.keys()):
+        arr = events.pop(uid)
+
+        # filter all nans out
+        event_mask = filter_nan_mask(arr, continous_features + categorical_features, uid),
+        arr = arr[event_mask]
+
+        # convert to torch
+        continous_tensor = numpy_to_torch(
+            arr,
+            continous_features,
+            dtype
+        )
+
+        categorical_tensor = numpy_to_torch(
+            arr,
+            categorical_features,
+            dtype
+        )
+
+        weight = torch.tensor(np.sum(arr["normalization_weight"]), dtype = dtype)
+        events[uid] = {
+            "continous": continous_tensor,
+            "categorical": categorical_tensor,
+            "weight": weight
+        }
+    return events
 
 def filter_datasets(
     events: dict[dict[ak.Array]],
@@ -288,18 +318,24 @@ def get_sum_of_weights(array):
             weights[year][process_id] = ak.sum(arr.normalization_weight)
     return weights
 
-def create_sampler(events, input_columns, dtype=torch.float32, min_size=1):
-    # convert to torch tensors and create EraDatasets objects
+def create_sampler(events, target_map, min_size=1):
+    # extract data from events and wrap into Datasets
     EraDatasetManager = EraDatasetSampler(None, batch_size=1024*4, min_size=min_size)
-    for (era, dataset_type, process_id), arr in events.items():
-        arr = ak.concatenate(arr)
-        inputs = awkward_to_torch(arr, input_columns, dtype)
-        target = awkward_to_torch(arr, ["target"], dtype)
-        weight = torch.tensor(ak.sum(arr.normalization_weight), dtype = dtype)
+    for uid in list(events.keys()):
+        (era, dataset_type, process_id) = uid
+        arrays = events.pop(uid)
+
+        # create target tensor from uid
+        num_events = len(arrays["continous"])
+        target_value = target_map[dataset_type]
+        target = torch.zeros(size=(num_events,3), dtype=torch.float32)
+        target[:, target_value] = 1.
+
         era_dataset = EraDataset(
-            inputs=inputs,
-            target=target ,
-            weight=weight ,
+            continous_tensor=arrays["continous"],
+            categorical_tensor=arrays["categorical"],
+            target=target,
+            weight=arrays["weight"],
             name=process_id,
             era=era,
             dataset_type=dataset_type,
@@ -307,22 +343,101 @@ def create_sampler(events, input_columns, dtype=torch.float32, min_size=1):
         EraDatasetManager.add_dataset(era_dataset)
         logger.info(f"Add {dataset_type} pid: {process_id} of era: {era}")
 
-    for ds_type in list(set([dataset_type for (era, dataset_type, process_id) in events.keys()])):
+    for ds_type in EraDatasetManager.keys:
         EraDatasetManager.calculate_sample_size(dataset_type=ds_type)
     return EraDatasetManager
 
+def get_batch_statistics(events, padding_value=0):
+    """
+    Calculates the weighted mean and standard deviation over all subphase spaces of a process in *events*.
+    The data is expected to be of form : {"unique_identifier_tuple": {continous: arr}, {weight}: arr}.
+    The return value is a dictionary of form {"process": (mean, std)}, where mean and std is a tensor of
+    form length [features].
+    The statistics are evaluated without *padding_value*.
 
-def get_std_statistics(events):
-    def weighted_average(means, weights):
-        return sum(weights * weights) / sum(weights)
-    # filter data after processes
+    Args:
+        events (dict): Dictionary over datasets
+        padding_value (int, optional): Ignored value in the calculation of the statitics. Defaults to 0.
+    """
+    logger.info("Calculate mean and std over all subphase spaces")
+    # filter keys after processes
+    means = []
+    stds = []
+    weights = []
+
+    for _, arrays in events.items():
+        # reshape to feature x events
+        arr_features = arrays["continous"].transpose(0,1)
+        weights.append(arrays["weight"])
+        # go throught each feature axis and calculate statitic per feature
+        f_means, f_stds = [], []
+        for f in arr_features:
+            padding_mask = f == padding_value
+            f_means.append(f[~padding_mask].mean(axis=0))
+            f_stds.append(f[~padding_mask].std(axis=0))
+
+            if torch.isnan(f[~padding_mask].mean(axis=0)):
+                from IPython import embed; embed(header="See which feature is nan")
+        means.append(f_means)
+        stds.append(f_stds)
+    means = torch.tensor(means)
+    stds = torch.tensor(stds)
+    weights = torch.tensor(weights).reshape(-1,1)
+
+    # resulting in a weight of form [features]
+    denom = torch.sum(weights)
+    w_avg_mean  = torch.sum((means * weights), axis=0) / denom
+    w_avg_std = torch.sum((stds * weights), axis=0) / denom
+    return w_avg_mean, w_avg_std
+
+
+def get_batch_statistics_per_dataset(events, padding_value=0):
+    """
+    Calculates the weighted mean and standard deviation over all subphase spaces of a process in *events*.
+    The data is expected to be of form : {"unique_identifier_tuple": {continous: arr}, {weight}: arr}.
+    The return value is a dictionary of form {"process": (mean, std)}, where mean and std is a tensor of
+    form length [features].
+    The statistics are evaluated without *padding_value*.
+
+    Args:
+        events (dict): Dictionary over datasets
+        padding_value (int, optional): Ignored value in the calculation of the statitics. Defaults to 0.
+    """
+    logger.info("Calculate mean and std over all subphase spaces")
+    # filter keys after processes
     keys_per_process = defaultdict(list)
     for uid in events.keys():
         (era, ds_type, pid) = uid
         keys_per_process[ds_type].append(uid)
 
-    means, stds = [],[]
-    for ds_type, uid in keys_per_process.items():
-        for (era, ds_type, pid), array in events[uid]:
-            pass
-        # arr = events[]
+    stats = {}
+    for process_type, uids in keys_per_process.items():
+        means = []
+        stds = []
+        weights = []
+        for uid in uids:
+            f_means, f_stds = [], []
+            # reshape to feature x events
+            arr_features = events[uid]["continous"].transpose(0,1)
+            weights.append(events[uid]["weight"])
+
+            # go throught each feature axis and calculate statitic per feature
+
+            for f in arr_features:
+                padding_mask = f == padding_value
+                f_means.append(f[~padding_mask].mean(axis=0))
+                f_stds.append(f[~padding_mask].std(axis=0))
+
+                if torch.isnan(f[~padding_mask].mean(axis=0)):
+                    from IPython import embed; embed(header="See which feature is nan")
+            means.append(f_means)
+            stds.append(f_stds)
+        means = torch.tensor(means)
+        stds = torch.tensor(stds)
+        weights = torch.tensor(weights).reshape(-1,1)
+
+        # resulting in a weight of form [features]
+        nom = torch.sum((means * weights), axis=0)
+        denom = torch.sum(weights)
+        stats[process_type] = nom / denom
+    return stats

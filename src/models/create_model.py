@@ -14,7 +14,7 @@ def init_layers(continous_features, categorical_features, config):
 
     # helper where all layers are defined
     # std layers are filled when statitics are known
-    std_layer = StandardizeLayer()
+    std_layer = StandardizeLayer(mean=config["mean"], std=config["std"])
 
     continuous_padding = PaddingLayer(padding_value=0, mask_value=EMPTY_FLOAT)
     categorical_padding = PaddingLayer(padding_value=config["empty_value"], mask_value=EMPTY_INT)
