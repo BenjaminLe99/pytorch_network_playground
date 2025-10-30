@@ -179,6 +179,7 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
                     logger.info(f"{year} | {dataset} | PID: {pid} | {len(p_array)}")
         return data
 
+
     def merge_per_pid(data):
         # replace_with_concatenated_from_buffers(data, axis=0)
         keys = list(data.keys())
@@ -201,7 +202,7 @@ def get_data(config, _save_cache = True, overwrite=False):
     cacher = DataCacher(config=config)
 
     # when cache exist load it and return the data
-    if not overwrite and cacher.path.exists():
+    if not overwrite and cacher.path:
         events = cacher.load_cache()
     else:
         logger.info("Prepare Loading of data:")
@@ -273,6 +274,20 @@ def convert_numpy_to_torch(events, continous_features, categorical_features, dty
             "weight": weight
         }
     return events
+
+def filter_fold(events, c_fold, k_fold, seed, train_ratio=0.75):
+    train, valid = {}, {}
+    for uid in list(events.keys()):
+        array = events.pop(uid)
+        train[uid] = {"weight" : array["weight"]}
+        valid[uid] = {"weight" : array["weight"]}
+        for key in ("continous", "categorical"):
+            arr = array.pop(key)
+            num_events = len(arr)
+            t_idx, v_idx = k_fold_indices(num_events, c_fold, k_fold, seed, train_ratio)
+            train[uid][key] = arr[t_idx]
+            valid[uid][key] = arr[v_idx]
+    return train, valid
 
 def filter_datasets(
     events: dict[dict[ak.Array]],
@@ -388,6 +403,58 @@ def get_batch_statistics(events, padding_value=0):
     w_avg_mean  = torch.sum((means * weights), axis=0) / denom
     w_avg_std = torch.sum((stds * weights), axis=0) / denom
     return w_avg_mean, w_avg_std
+
+def k_fold_indices_decapicated(num_events: int, k: int , random: bool=True):
+    """
+    Calculates indices to define *k* folds. The indices range from 0 to *num_events*.
+    If folds should be shuffled set *random* to true
+
+    Args:
+        num_events (int): Number of events of the data that is folded
+        k (int): Number of folds
+        random (bool, optional): Shuffle indices that make up the fold. Defaults to True.
+
+    Returns:
+        list[torch.Tensor]: List of torch tensors of indices
+    """
+    # data is expected to be torch tensors
+    fold_size = num_events // k
+    # shuffle indices
+    if random:
+        indices = torch.randperm(num_events)
+    else:
+        indices = torch.arange(num_events)
+    folds = []
+    for i in range(k):
+        start_interval = i * fold_size
+        # last fold has slightly more data
+        end_interval = (i + 1) * fold_size if i != (k - 1) else num_events
+        sub_indices = indices[start_interval : end_interval]
+        folds.append(sub_indices)
+    return folds
+
+def k_fold_indices(num_events, c_fold, k_fold, seed, train_ratio=0.75):
+    """
+    Creates idicies for training and validation from *k_fold*, where *c_fold* is the test fold.
+    The indicies are randomly shuffled using *seed*. The return is first the training indices and then validation, split
+    by *train_ratio*.
+    """
+    indices = torch.arange(num_events)
+    # true => test, kicked out, rest is used
+    test_fold_mask = indices % k_fold == c_fold
+    tv_indices = indices[~test_fold_mask]
+    rnd_idx = torch.randperm(len(tv_indices), generator=torch.Generator().manual_seed(seed))
+    tv_indices = tv_indices[rnd_idx]
+
+    # splt into train and valid
+    train_length = round((len(tv_indices) * train_ratio))
+    t_idx = tv_indices[:train_length]
+    v_idx = tv_indices[train_length:]
+    return t_idx, v_idx
+
+
+
+
 
 
 def get_batch_statistics_per_dataset(events, padding_value=0):

@@ -200,7 +200,7 @@ class EraDatasetSampler(t_data.Sampler):
     def __len__(self):
         return sum([len(ds) for ds in self.datasets])
 
-    def get_batch(self, shuffle_batch=True):
+    def get_batch(self, device=torch.device("cpu"), shuffle_batch=True):
         # loop over dataset classes and ask them to generate a certain number of samples
 
         # shuffle finished batch optionally
@@ -223,4 +223,4 @@ class EraDatasetSampler(t_data.Sampler):
             batch_cont = batch_cont[indices]
             batch_cat = batch_cat[indices]
             batch_target = batch_target[indices]
-        return batch_cont, batch_cat, batch_target
+        return batch_cont.to(device), batch_cat.to(device), batch_target.to(device)
