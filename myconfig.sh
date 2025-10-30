@@ -1,4 +1,4 @@
-export STORE_DIR=/data/dust/user/lebenjam/Master/
+export STORE_DIR=/data/dust/user/lebenjam/Master/dnn
 export SOFTWARE_DIR=${STORE_DIR}/software
 export TRAINING_DIR=${STORE_DIR}/training/results
 export CACHE_DIR=${STORE_DIR}/cache

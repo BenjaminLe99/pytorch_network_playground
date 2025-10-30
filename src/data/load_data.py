@@ -127,13 +127,12 @@ def get_loader(file_type: str, **kwargs):
     Returns:
         func: loader function, configuration dictionary
     """
-    match file_type:
-        case "root":
-            return root_to_numpy, {"branches": kwargs.get("columns", None)}
-        case "parquet":
-            return parquet_to_awkward, {"columns": kwargs.get("columns", None)}
-        case _:
-            raise ValueError(f"Unknown file type: {file_type}")
+    if file_type == "root":
+        return root_to_numpy, {"branches": kwargs.get("columns", None)}
+        #case "parquet":
+        #    return parquet_to_awkward, {"columns": kwargs.get("columns", None)}
+        #case _:
+        #    raise ValueError(f"Unknown file type: {file_type}")
 
 
 def load_data(datasets, file_type: str="root", columns: Union[list[str],str, None]=None):
@@ -202,7 +201,7 @@ def get_data(config, _save_cache = True, overwrite=False):
     cacher = DataCacher(config=config)
 
     # when cache exist load it and return the data
-    if not overwrite:
+    if not overwrite and cacher.path.exists():
         events = cacher.load_cache()
     else:
         logger.info("Prepare Loading of data:")

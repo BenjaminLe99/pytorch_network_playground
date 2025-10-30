@@ -27,9 +27,13 @@ dataset_config = {
 layer_config = {
     "ref_phi_columns": ("res_dnn_pnet_vis_tau1", "res_dnn_pnet_vis_tau2"),
     "rotate_columns": ("res_dnn_pnet_bjet1", "res_dnn_pnet_bjet2", "res_dnn_pnet_fatjet", "res_dnn_pnet_vis_tau1", "res_dnn_pnet_vis_tau2"),
+    "nodes": 32,
+    "num_resblocks": 1,
+    "activation_functions": "PReLu",
+    "embedding_dim": 4,
     "empty_value": 15,
-    "nodes": 128,
-    "activation_functions": "PReLU",
+    "eps": 0.5e-5,
+    "linear_layer_normalization": False,
     "skip_connection_init": 1,
     "freeze_skip_connection": False,
 }
@@ -52,8 +56,6 @@ sampler = create_sampler(
     target_map = {"hh" : 0, "dy": 1, "tt": 2},
     min_size=3,
 )
-from IPython import embed; embed(header="string - 50 in train.py ")
-
 
 
 # training loop:
@@ -84,7 +86,7 @@ for iteration in range(max_iteration):
     optimizer.zero_grad()
 
     cont, cat, targets = sampler.get_batch()
-    targets = targets.to(torch.float32)
+    #targets = targets.to(torch.float32)
     cont, cat, targets = cont.to(DEVICE), cat.to(DEVICE), targets.to(DEVICE)
 
     pred = model((cat,cont))
@@ -96,5 +98,3 @@ for iteration in range(max_iteration):
     running_loss += loss.item()
     if iteration % LOG_INTERVAL == 0:
         print(f"Step {iteration} Loss: {loss.item():.4f}")
-
-from IPython import embed; embed(header="END - 89 in train.py ")
