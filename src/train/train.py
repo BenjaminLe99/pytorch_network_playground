@@ -69,7 +69,7 @@ sampler = create_sampler(
 )
 
 
-from IPython import embed; embed(header="string - 45 in train.py ")
+#from IPython import embed; embed(header="string - 45 in train.py ")
 layer_config["mean"],layer_config["std"] = get_batch_statistics(events, padding_value=-99999)
 
 # fold data
@@ -105,7 +105,7 @@ max_iteration = 1000
 LOG_INTERVAL = 10
 model.train()
 running_loss = 0.0
-from IPython import embed; embed(header="BEFORE trainig - 81 in train.py ")
+#from IPython import embed; embed(header="BEFORE trainig - 81 in train.py ")
 # training loop:
 
 for iteration in range(max_iteration):
