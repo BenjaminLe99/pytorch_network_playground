@@ -15,6 +15,7 @@ class DataCacher():
         h = tuple(config.items())
         h = hashlib.sha256(str(h).encode("utf-8")).hexdigest()[:10]
         p = pathlib.Path(os.environ["CACHE_DIR"])
+        
         if not p.exists():
             raise FileExistsError("Cache dir does not exist")
         return p / h

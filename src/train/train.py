@@ -1,7 +1,7 @@
 import torch
 #from utils import utils
 from models import layers, create_model
-from data import features
+from data.features import input_features
 from data.load_data import get_data, find_datasets, create_sampler, get_batch_statistics, filter_fold
 
 
@@ -14,14 +14,15 @@ eras = ["22pre", "22post", "23pre", "23post"]
 era_map = {"22pre": 0, "22post": 1, "23pre": 2, "23post": 3}
 datasets = find_datasets(["dy_*","tt_*", "hh_ggf_hbb_htt_kl0_kt1*"], eras, "root")
 debugging = False
+continous_features, categorical_features = input_features(debug=debugging, debug_length=3)
+
 
 dataset_config = {
     "min_events":3,
-    "continous_features" : features.continous_features if not debugging else features.continous_features[:2],
-    "categorical_features": features.categorical_features if not debugging else features.categorical_features[:2],
+    "continous_features" : continous_features,
+    "categorical_features": categorical_features,
     "eras" : eras,
     "datasets" : datasets,
-    "folds" : 3,
 }
 
 # config of network
@@ -50,14 +51,24 @@ config = {
 }
 
 
+# load data from cache or root files
 events = get_data(dataset_config, overwrite=False)
+# create k-folds from data, where seed is left out
 train_data, validation_data = filter_fold(
     events,
-    c_folg=config["c_fold"],
+    c_fold=config["current_fold"],
     k_fold=config["k_fold"],
     seed=config["seed"],
     train_ratio=config["train_ratio"]
 )
+# create train and validation sampler from k-1 folds
+sampler = create_sampler(
+    train_data,
+    target_map = {"hh" : 0, "dy": 1, "tt": 2},
+    min_size=3,
+)
+
+
 from IPython import embed; embed(header="string - 45 in train.py ")
 layer_config["mean"],layer_config["std"] = get_batch_statistics(events, padding_value=-99999)
 

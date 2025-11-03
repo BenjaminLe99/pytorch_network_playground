@@ -15,6 +15,7 @@ class EraDataset(t_data.Dataset):
         name: str=None,
         era: str=None,
         dataset_type: str=None,
+        randomize: bool =True
     ):
         self.continous_input = continous_tensor
         self.categorical_input = categorical_tensor
@@ -22,9 +23,14 @@ class EraDataset(t_data.Dataset):
         self.weight = weight
         self.name = name
         self.era = era
+        self.randomize = randomize
         self.reset()
         self.dataset_type = dataset_type
-        self.sample_size = None
+        self.sample_size = len(self)
+
+    @property
+    def uid(self):
+        return (self.era, self.dataset_type, self.name)
 
     def __len__(self):
         return self.targets.shape[0]
@@ -34,9 +40,25 @@ class EraDataset(t_data.Dataset):
 
     def reset(self):
         self.current_idx = 0
-        self.indices = torch.randperm(len(self))
+        if self.randomize:
+            self.indices = torch.randperm(len(self))
+        else:
+            self.indices = torch.arange(len(self))
 
     def sample(self, number=None):
+        """
+        Sample *number* of events from self.{continous,categorical,targets}.
+        Samples from the start again, if maximum number of samples is reached.
+
+        Args:
+            number (_type_, optional): Number of events to sample. If "all" returns full. Defaults to None.
+
+        Raises:
+            ValueError: _description_
+
+        Returns:
+            _type_: _description_
+        """
         if number is None:
             number = self.sample_size
 
@@ -46,58 +68,71 @@ class EraDataset(t_data.Dataset):
         start_idx = self.current_idx
         # do not drop last, but instead create smaller batch
         next_idx = min(self.current_idx + number, len(self))
-
         idx = self.indices[start_idx:next_idx]
+
         # reset if we reached the end of the dataset and drop last incomplete batch
-        try:
-            data = self.continous_input[idx], self.categorical_input[idx],self.targets[idx]
-        except:
-            from IPython import embed; embed(header="string - 55 in datasets.py ")
+        data = self.continous_input[idx], self.categorical_input[idx],self.targets[idx]
         self.current_idx = next_idx
         if self.current_idx >= len(self):
             self.reset()
         return data
 
+    def get_data(self, batch_size=None):
+        while self.current_idx < len(self):
+            yield self.sample(batch_size)
+
 
 class EraDatasetSampler(t_data.Sampler):
     def __init__(
         self,
-        datasets=None,
+        datasets_inst=None,
         batch_size=1,
         sample_ratio={"dy": 0.25, "tt": 0.25, "hh": 0.5},
         min_size = None,
         ):
         self.total_weight = {"dy":0, "tt":0, "hh":0}
-        self.datasets = defaultdict(dict)  # {dataset_type: {(era, process_id): dataset}}
-        self.weights = defaultdict(dict)
+        self.era_dataset_inst = defaultdict(dict)  # {dataset_type: {(era, process_id): dataset}}
         self.batch_size = torch.Tensor([batch_size])
-        if datasets is not None:
-            for dataset in datasets:
+        if datasets_inst is not None:
+            for dataset in datasets_inst:
                 self.add_dataset(dataset)
         self.sample_ratio = sample_ratio
         self.min_size = min_size # index where to split continous and categorical data
+
+    def flat_datasets(self):
+        datasets = {}
+        for _, uid_ds in self.era_dataset_inst.items():
+            datasets.update(uid_ds)
+            return datasets
+
+    def apply_func_on_datasets(self, func):
+        # small helper to apply function of managet datasets
+        return {uid: func(ds) for uid,ds in self.flat_datasets().items()}
+
+    def get_attribute_of_datasets(self, attr):
+        # small helper to getattributes from managet datasets
+        return {uid: getattr(ds, attr) for uid,ds in self.flat_datasets().items()}
+
+    def events_per_dataset(self):
+        return self.apply_func_on_datasets(len)
+
+    def __len__(self):
+        return sum(list(self.events_per_dataset()).values())
 
     def add_dataset(self, dataset):
         # {era : process_id: {array}}
         weight = dataset.weight
         self.total_weight[dataset.dataset_type] += weight
-        self.datasets[dataset.dataset_type][(dataset.era, dataset.name)] = dataset
+        self.era_dataset_inst[dataset.dataset_type][(dataset.era, dataset.name)] = dataset
 
     @property
     def keys(self):
-        return list(self.datasets.keys())
-
-    @property
-    def sample_sizes(self):
-        _sample_sizes = []
-        for ds_type in self.keys:
-            _sample_sizes = _sample_sizes + [ds.sample_size for ds in self.datasets[ds_type]]
-        return _sample_sizes
+        return list(self.era_dataset_inst.keys())
 
     def print_sample_rates(self):
         logger.info(f"Sample rate for Dataset of Era")
 
-        for dataset_type, uid in self.datasets.items():
+        for dataset_type, uid in self.era_dataset_inst.items():
             total_batch = 0
             logger.info(f"{dataset_type}:")
             for (era, pid), ds in uid.items():
@@ -110,7 +145,7 @@ class EraDatasetSampler(t_data.Sampler):
         # from IPython import embed; embed(header="string - 84 in datasets.py ")
         # unpack and convert to tensors for easier handling, get desired_sub_batch_size
         weights, keys = [], []
-        for (era, pid), ds in self.datasets[dataset_type].items():
+        for (era, pid), ds in self.era_dataset_inst[dataset_type].items():
             weights.append(ds.weight.item())
             keys.append((era, pid))
         weights = torch.tensor(weights, dtype=torch.float32)
@@ -191,14 +226,9 @@ class EraDatasetSampler(t_data.Sampler):
         # store batch size per phase space in dataset
         if not dry:
             for k, w in zip(keys, floored_sizes):
-                self.datasets[dataset_type][k].sample_size = w.item()
+                self.era_dataset_inst[dataset_type][k].sample_size = w.item()
         else:
             logger.info({k:w.item() for k,w in zip(keys, floored_sizes)})
-
-
-    @property
-    def __len__(self):
-        return sum([len(ds) for ds in self.datasets])
 
     def get_batch(self, device=torch.device("cpu"), shuffle_batch=True):
         # loop over dataset classes and ask them to generate a certain number of samples
@@ -208,7 +238,7 @@ class EraDatasetSampler(t_data.Sampler):
         batch_cont, batch_cat, batch_target = [], [], []
 
         # from IPython import embed; embed(header="GETBATCH - 66 in datasets.py ")
-        for _, uid in self.datasets.items():
+        for _, uid in self.era_dataset_inst.items():
             for ds in uid.values():
                 cont, cat, target = ds.sample()
                 batch_cont.append(cont), batch_cat.append(cat), batch_target.append(target)
