@@ -6,6 +6,7 @@ from data.preprocessing import (
     create_train_or_validation_sampler, get_batch_statistics, split_k_fold_into_training_and_validation
     )
 from utils.logger import get_logger
+from ml_save import torch_export
 
 CPU = torch.device("cpu")
 CUDA = torch.device("cuda")
@@ -82,12 +83,13 @@ config = {
     "train_folds" : (0,),
     "k_fold" : 5,
     "seed" : 1,
-    "train_ratio" : 0.75
+    "train_ratio" : 0.75,
+    "modelname": "test",
 }
 
 
 for current_fold in (config["train_folds"]):
-    logger.info(f"Start Training of fold {current_fold} from {config["k_fold"] - 1}")
+    logger.info(f'Start Training of fold {current_fold} from {config["k_fold"] - 1}')
 
     ### data preparation
     # Hint: order matters, due to memory constraints views are moved in and out of dictionaries
@@ -103,9 +105,8 @@ for current_fold in (config["train_folds"]):
         k_fold=config["k_fold"],
         seed=config["seed"],
         train_ratio=config["train_ratio"],
-        test=False,
+        #test=False,
     )
-
     # get weighted mean and std of expected batch composition
     layer_config["mean"],layer_config["std"] = get_batch_statistics(train_data, padding_value=-99999)
 
@@ -180,5 +181,4 @@ for current_fold in (config["train_folds"]):
 
     # TODO release DATA from previous RUN
 
-    from IPython import embed; embed(header="END - 89 in train.py ")
-from IPython import embed; embed(header="FINAL - 89 in train.py ")
+torch_export(model.to(CPU), config["modelname"], training_sampler.sample_batch(device=CPU))
