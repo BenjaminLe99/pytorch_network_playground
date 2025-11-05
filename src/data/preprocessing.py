@@ -24,20 +24,23 @@ def get_batch_statistics(events, padding_value=0):
     means = []
     stds = []
     weights = []
-
-    for _, arrays in events.items():
+    for uid, arrays in events.items():
         # reshape to feature x events
+
         arr_features = arrays["continous"].transpose(0,1)
         weights.append(arrays["weight"])
         # go throught each feature axis and calculate statitic per feature
         f_means, f_stds = [], []
         for f in arr_features:
-            padding_mask = f == padding_value
-            f_means.append(f[~padding_mask].mean(axis=0))
-            f_stds.append(f[~padding_mask].std(axis=0))
+            padding_mask = (f == padding_value)
+            masked_array = f[~padding_mask]
+            masked_mean = masked_array.mean(axis=0)
+            masked_std = masked_array.std(axis=0)
+            if torch.isnan(masked_mean):
+                from IPython import embed; embed(header=f"{uid} is nan check f and events")
 
-            if torch.isnan(f[~padding_mask].mean(axis=0)):
-                from IPython import embed; embed(header="See which feature is nan")
+            f_means.append(masked_mean)
+            f_stds.append(masked_std)
         means.append(f_means)
         stds.append(f_stds)
     means = torch.tensor(means)
@@ -164,13 +167,27 @@ def split_k_fold_into_training_and_validation(events_dict, c_fold, k_fold, seed,
         array = events_dict.pop(uid)
         train[uid] = {"weight" : array["weight"]}
         valid[uid] = {"weight" : array["weight"]}
+
         for key in ("continous", "categorical"):
             arr = array.pop(key)
             num_events = len(arr)
             tv_indices = k_fold_indices(num_events, c_fold, k_fold, seed, test=False)
             t_idx, v_idx = split_array_to_train_and_validation(tv_indices, train_ratio)
-            train[uid][key] = arr[t_idx]
-            valid[uid][key] = arr[v_idx]
+
+            t_arr = arr[t_idx]
+            v_arr = arr[v_idx]
+
+            train[uid][key] = t_arr
+            valid[uid][key] = v_arr
+
+    # edge case split results in empty tensors (due to very low event count) remove these
+    # if empty do not save
+    for uid in list(train.keys()):
+        for d in ("train", "valid"):
+            dictionary = locals()[d]
+            if (dictionary[uid]["continous"].numel() == 0):
+                logger.info(f"removed {uid} from {d} since zero elements left after k-fold split")
+                dictionary.pop(uid)
     return train, valid
 
 def create_train_or_validation_sampler(events, target_map, batch_size, min_size=1, train=True):

@@ -100,6 +100,7 @@ class EraDataset(t_data.Dataset):
 
         while self.current_idx < len(self):
             cont, cat, tar  = self.sample(batch_size)
+
             # yield self.sample(batch_size)
             yield cont.to(device), cat.to(device), tar.to(device)
 
@@ -115,12 +116,15 @@ class EraDatasetSampler(t_data.Sampler):
         ):
         self.total_weight = {"dy":0, "tt":0, "hh":0}
         self.dataset_inst = defaultdict(dict)  # {dataset_type: {(era, process_id): dataset}}
-        self.batch_size = torch.Tensor([batch_size])
+        self.batch_size = torch.tensor([batch_size], dtype=torch.int32)
         if datasets_inst is not None:
             for dataset in datasets_inst:
                 self.add_dataset(dataset)
         self.sample_ratio = sample_ratio
         self.min_size = min_size # index where to split continous and categorical data
+
+    def __getitem__(self, uid):
+        return self.flat_datasets()[uid]
 
     def flat_datasets(self):
         datasets = {}

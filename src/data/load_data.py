@@ -79,7 +79,7 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
     # include meta fields that are necessary for every training
     # process_id is for filtering after subprocesses
     # normalizaton_weight is for
-    meta_fields = {"process_id", "normalization_weight"}
+    meta_fields = {"process_id", "normalization_weight", "tau2_isolated", "leptons_os", "channel_id"}
     branches = set(branches).union(meta_fields)
 
     if isinstance(files_path, str):
@@ -131,7 +131,7 @@ def get_loader(file_type: str, **kwargs):
         #    raise ValueError(f"Unknown file type: {file_type}")
 
 
-def load_data(datasets, file_type: str="root", columns: Union[list[str],str, None]=None):
+def load_data(datasets, file_type: str="root", columns: Union[list[str],str, None]=None, apply_filter=True):
     """
     Loads data with given *file_type* in given a *dataset_pattern* and *year_pattern*. If only certain columns are needed, they can be specified in *columns*.
     The data sorted by year and dataset name is returned as a nested dictionary in awkward format.
@@ -146,8 +146,9 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
         dict: {year:{pid: List(Ids)}}
     """
 
-    def filter_by_process_id(array):
-        # events of structure {year:{dataset : array}}
+    def sort_by_process_id(array):
+        # helper to sort data by process id and not datasets,
+        # results in array of structure {year:{dataset : array}}
         pids = array["process_id"]
         unique_ids = np.unique(pids)
         p_array = {}
@@ -155,6 +156,16 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
             mask = pids == uid
             p_array[int(uid)] = array[mask]
         return tuple(p_array.items())
+
+    def filter_base_selection(array):
+        # applies base selection as event filter
+        masks = (
+        array["tau2_isolated"] == 1,
+        array["leptons_os"] == 1,
+        (array["channel_id"] == 1) | (array["channel_id"] == 2) | (array["channel_id"] == 3)
+        )
+        masks = np.logical_and.reduce(masks)
+        return array[masks]
 
     def load_data_per_process_id(loader, datasets, config):
         data = {}
@@ -164,8 +175,11 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
                 # load inputs
                 events = loader(files, **config)
 
+                # apply filters
+                if apply_filter:
+                    events = filter_base_selection(events)
                 # filter by process_id if necessary and save, otherwise save by dataset
-                p_arrays = filter_by_process_id(events)
+                p_arrays = sort_by_process_id(events)
                 for pid, p_array in p_arrays:
                     uid = (year,dataset[:2],pid)
                     if uid not in data:
@@ -174,10 +188,10 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
                     logger.info(f"{year} | {dataset} | PID: {pid} | {len(p_array)}")
         return data
 
-
     def merge_per_pid(data):
         # replace_with_concatenated_from_buffers(data, axis=0)
         keys = list(data.keys())
+
         for i, uid in enumerate(keys):
             print(i, uid)
             arrays = data.pop(uid)
@@ -248,6 +262,11 @@ def convert_numpy_to_torch(events, continous_features, categorical_features, dty
         # filter all nans out
         event_mask = filter_nan_mask(arr, continous_features + categorical_features, uid),
         arr = arr[event_mask]
+
+        # if resulting tensor is empty just skip
+        if arr.numel() == 0:
+            logger.info(f"Skipping {uid} due to zero elements")
+            continue
 
         continous_tensor, categorical_tensor = [
             numpy_to_torch(arr, feature, dtype)
