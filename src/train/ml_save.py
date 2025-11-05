@@ -24,7 +24,7 @@ def torch_export(model, name, input_tensors):
      p = Path(save_path + f"{name}").with_suffix(".pt2")
      torch.export.save(exp, p)
 
-def run_exported_tensor_model(pt2_ptrath, input_tensors):
+def run_exported_tensor_model(pt2_path, input_tensors):
     exp = torch.export.load(pt2_path)
     scores = exp.module()(input_tensors)
     return scores
