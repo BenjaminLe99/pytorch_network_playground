@@ -75,3 +75,35 @@ class SAM(torch.optim.Optimizer):
     def load_state_dict(self, state_dict):
         super().load_state_dict(state_dict)
         self.base_optimizer.param_groups = self.param_groups
+
+    def sam_training_routine(self, model, categorical_x, continous_x, target, loss_fn):
+        pred = model((categorical_x, continous_x))
+        loss = loss_fn(pred, target)
+
+        loss.backward()
+        self.first_step(zero_grad=True)
+
+        # second forward step with disabled bachnorm running stats in second forward step
+        self.disable_running_stats(model)
+        pred_2 = model(categorical_x, continous_x)
+        loss_fn(pred_2, target).backward()
+        self.second_step(zero_grad=True)
+
+
+    def disable_running_stats(self, model):
+        # set save previous moment as backup_momentum set momentum to 0
+        # this is necessary since SAM doing a 2 step forward and batchnorm statistics would be wrong
+        def _disable(module):
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                module.backup_momentum = module.momentum
+                module.momentum = 0
+
+        model.apply(_disable)
+
+    def enable_running_stats(self, model):
+        # renable previous moment
+        def _enable(module):
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm) and hasattr(module, "backup_momentum"):
+                module.momentum = module.backup_momentum
+
+        model.apply(_enable)

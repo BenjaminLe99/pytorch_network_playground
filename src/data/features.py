@@ -17,6 +17,12 @@ def expand(str_list):
         cols.extend(brace_expand(_str))
     return cols
 
+def add_prefix(string, prefix, ignore_code="_"):
+    if string.startswith(ignore_code):
+        return string[1:] # remove ignoring code
+    else:
+        return prefix + string
+
 def input_features(debug=False, debug_length=3):
     data_prefix = "res_dnn_pnet_"
     categorical_features: list[str] = [
@@ -45,12 +51,6 @@ def input_features(debug=False, debug_length=3):
         "htthbb_e", "htthbb_px", "htthbb_py", "htthbb_pz",
         "httfatjet_e", "httfatjet_px", "httfatjet_py", "httfatjet_pz",
     ]
-
-    def add_prefix(string, prefix, ignore_code="_"):
-        if string.startswith(ignore_code):
-            return string[1:] # remove ignoring code
-        else:
-            return prefix + string
 
     continous_features =  [add_prefix(f, data_prefix, ignore_code="_") for f in continous_features]
     categorical_features =  [add_prefix(f, data_prefix, ignore_code="_") for f in categorical_features]

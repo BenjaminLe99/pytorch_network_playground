@@ -219,3 +219,54 @@ def create_train_or_validation_sampler(events, target_map, batch_size, min_size=
         for ds_type in EraDatasetManager.keys:
             EraDatasetManager.calculate_sample_size(dataset_type=ds_type)
     return EraDatasetManager
+
+def test_sampler(events, target_map, batch_size, min_size=1, train=True):
+    # Function to test a sampler that is actually doing the right thing
+
+    # extract data from events and wrap into Datasets
+    ERA_MAP = {"22pre": 0, "22post":1, "23pre":2, "23post":3}
+    EraDatasetManager = EraDatasetSampler(None, batch_size=batch_size, min_size=min_size)
+    for uid in list(events.keys()):
+        (era, dataset_type, process_id) = uid
+        # create target tensor from uid
+        num_events = len(events[uid]["continous"])
+        target_value = target_map[dataset_type]
+        target = torch.zeros(size=(num_events, len(target_map)), dtype=torch.float32)
+        target[:, target_value] = 1.
+
+        era_tensor = torch.full(size=(num_events,), fill_value=ERA_MAP[era], dtype=torch.int32)
+        process_id_tensor = torch.full(size=(num_events,), fill_value=process_id, dtype=torch.int32)
+
+        era_dataset = EraDataset(
+            continous_tensor=process_id_tensor,
+            categorical_tensor=era_tensor,
+            target=target,
+            weight=events[uid]["weight"],
+            name=process_id,
+            era=era,
+            dataset_type=dataset_type,
+        )
+        EraDatasetManager.add_dataset(era_dataset)
+        logger.info(f"Add {dataset_type} pid: {process_id} of era: {era}")
+
+    if train:
+        for ds_type in EraDatasetManager.keys:
+            EraDatasetManager.calculate_sample_size(dataset_type=ds_type)
+
+    sample_sizes_per_ds = EraDatasetManager.get_attribute_of_datasets("sample_size")
+    sample_sizes_per_ds = {(ERA_MAP[era],pid): events for (era,pid), events in sample_sizes_per_ds.items()}
+
+    def batch_comparison(sample_size_per_ds, batch):
+        pid, era, target = batch
+        # count occurences
+        d = sample_size_per_ds.copy()
+        for idx in range(len(pid)):
+            pid_v, era_v = pid[idx], era[idx]
+            key = (era_v.item(), pid_v.item())
+            d[key] -= 1
+        return d
+    ds = EraDatasetManager
+    from IPython import embed; embed(header="string - 256 in preprocessing.py ")
+
+
+    return EraDatasetManager

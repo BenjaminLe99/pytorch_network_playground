@@ -82,13 +82,19 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
     meta_fields = {"process_id", "normalization_weight", "tau2_isolated", "leptons_os", "channel_id"}
     branches = set(branches).union(meta_fields)
 
+    baseline_cuts = (
+        "(tau2_isolated == 1)",
+        "(leptons_os == 1)",
+        "((channel_id == 1) | (channel_id == 2) | (channel_id == 3))",
+    )
+
     if isinstance(files_path, str):
         files_path = [files_path]
     arrays = []
     for file_path in files_path:
         with uproot.open(file_path, object_cache=None, array_cache=None) as file:
             tree = file["events"]
-            arrays.append(tree.arrays(branches, library="ak").to_numpy())
+            arrays.append(tree.arrays(branches, library="ak", cut="&".join(baseline_cuts)).to_numpy())
     return np.concatenate(arrays, axis=0)
 
 def parquet_to_awkward(files_path: Union[list[str],str], columns: Union[list[str], str, None]=None) -> ak.Array:
@@ -123,15 +129,16 @@ def get_loader(file_type: str, **kwargs):
     Returns:
         func: loader function, configuration dictionary
     """
-    if file_type == "root":
-        return root_to_numpy, {"branches": kwargs.get("columns", None)}
-        #case "parquet":
-        #    return parquet_to_awkward, {"columns": kwargs.get("columns", None)}
-        #case _:
-        #    raise ValueError(f"Unknown file type: {file_type}")
+    match file_type:
+        case "root":
+            return root_to_numpy, {"branches": kwargs.get("columns", None), "cut": kwargs.get("cuts", None)}
+        case "parquet":
+            return parquet_to_awkward, {"columns": kwargs.get("columns", None)}
+        case _:
+            raise ValueError(f"Unknown file type: {file_type}")
 
 
-def load_data(datasets, file_type: str="root", columns: Union[list[str],str, None]=None, apply_filter=True):
+def load_data(datasets, file_type: str="root", columns: Union[list[str],str, None]=None):
     """
     Loads data with given *file_type* in given a *dataset_pattern* and *year_pattern*. If only certain columns are needed, they can be specified in *columns*.
     The data sorted by year and dataset name is returned as a nested dictionary in awkward format.
@@ -145,7 +152,6 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
     Returns:
         dict: {year:{pid: List(Ids)}}
     """
-
     def sort_by_process_id(array):
         # helper to sort data by process id and not datasets,
         # results in array of structure {year:{dataset : array}}
@@ -157,17 +163,8 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
             p_array[int(uid)] = array[mask]
         return tuple(p_array.items())
 
-    def filter_base_selection(array):
-        # applies base selection as event filter
-        masks = (
-        array["tau2_isolated"] == 1,
-        array["leptons_os"] == 1,
-        (array["channel_id"] == 1) | (array["channel_id"] == 2) | (array["channel_id"] == 3)
-        )
-        masks = np.logical_and.reduce(masks)
-        return array[masks]
-
     def load_data_per_process_id(loader, datasets, config):
+
         data = {}
         for year, year_data in datasets.items():
             # add events with structure {dataset_name : events}
@@ -175,10 +172,6 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
                 # load inputs
                 events = loader(files, **config)
 
-                # apply filters
-                if apply_filter:
-                    events = filter_base_selection(events)
-                # filter by process_id if necessary and save, otherwise save by dataset
                 p_arrays = sort_by_process_id(events)
                 for pid, p_array in p_arrays:
                     uid = (year,dataset[:2],pid)
