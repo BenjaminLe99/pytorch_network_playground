@@ -60,7 +60,7 @@ def find_datasets(dataset_patterns: str, year_patterns: str, file_type: str="roo
                 data[year][dataset.name] = files
     return data
 
-def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], str, None]=None) -> ak.Array:
+def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], str, None]=None, cut=None) -> ak.Array:
     """
     Load all root files in *files_path* and return them as a single awkward array.
     If only certain branches are needed, they can be specified in *branches*.
@@ -82,11 +82,19 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
     meta_fields = {"process_id", "normalization_weight", "tau2_isolated", "leptons_os", "channel_id"}
     branches = set(branches).union(meta_fields)
 
-    baseline_cuts = (
+    # handle cuts
+    baseline_cuts = [
         "(tau2_isolated == 1)",
         "(leptons_os == 1)",
         "((channel_id == 1) | (channel_id == 2) | (channel_id == 3))",
-    )
+    ]
+
+    if isinstance(cut, (str)):
+        cut = [cut]
+    if cut is None:
+        cut = []
+    cuts = baseline_cuts + cut
+
 
     if isinstance(files_path, str):
         files_path = [files_path]
@@ -94,7 +102,7 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
     for file_path in files_path:
         with uproot.open(file_path, object_cache=None, array_cache=None) as file:
             tree = file["events"]
-            arrays.append(tree.arrays(branches, library="ak", cut="&".join(baseline_cuts)).to_numpy())
+            arrays.append(tree.arrays(branches, library="ak", cut="&".join(cuts)).to_numpy())
     return np.concatenate(arrays, axis=0)
 
 def parquet_to_awkward(files_path: Union[list[str],str], columns: Union[list[str], str, None]=None) -> ak.Array:
@@ -177,15 +185,16 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
                     if uid not in data:
                         data[uid] = []
                     data[uid].append(p_array)
-                    logger.info(f"{year} | {dataset} | PID: {pid} | {len(p_array)}")
+                    logger.debug(f"{year} | {dataset} | PID: {pid} | {len(p_array)}")
         return data
 
     def merge_per_pid(data):
         # replace_with_concatenated_from_buffers(data, axis=0)
         keys = list(data.keys())
 
+        logger.info("Start merging arrays per process id")
         for i, uid in enumerate(keys):
-            print(i, uid)
+            logger.debug(f"{i}/{len(keys)}: {uid}")
             arrays = data.pop(uid)
             concat = np.concatenate(arrays, axis=0)
             data[uid] = concat
@@ -256,7 +265,7 @@ def convert_numpy_to_torch(events, continous_features, categorical_features, dty
         arr = arr[event_mask]
 
         # if resulting tensor is empty just skip
-        if arr.numel() == 0:
+        if arr.size == 0:
             logger.info(f"Skipping {uid} due to zero elements")
             continue
 

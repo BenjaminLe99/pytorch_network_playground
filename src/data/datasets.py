@@ -27,6 +27,7 @@ class EraDataset(t_data.Dataset):
         self.reset()
         self.dataset_type = dataset_type
         self.sample_size = len(self)
+        self.relative_weight = None
 
     @property
     def uid(self):
@@ -130,7 +131,7 @@ class EraDatasetSampler(t_data.Sampler):
         datasets = {}
         for _, uid_ds in self.dataset_inst.items():
             datasets.update(uid_ds)
-            return datasets
+        return datasets
 
     def apply_func_on_datasets(self, func):
         # small helper to apply function of managet datasets
@@ -193,6 +194,9 @@ class EraDatasetSampler(t_data.Sampler):
         total_weight = weights.sum()
         ideal_sizes = sub_batch_size * weights / total_weight
 
+        # add relative weight to datasets
+        for (era, pid), ds in self.dataset_inst[dataset_type].items():
+            ds.relative_weight = ds.weight / total_weight * self.sample_ratio[dataset_type]
         # step 1:
 
         # check if UPSAMPLING IS NECESSARY AT ALL
@@ -242,8 +246,11 @@ class EraDatasetSampler(t_data.Sampler):
         # if one still mismatch add it on lowest or remove from highest
         very_last_remaining = int(floored_sizes.sum()) - sub_batch_size
         # from IPython import embed; embed(header="string - 144 in datasets.py ")
+
+        # TODO BETTER SCHEME
+        # remove remaining from biggest sample or add more to biggest sample
         if very_last_remaining <= -1:
-            floored_sizes[indices_above_threshold[0]] += very_last_remaining
+            floored_sizes[indices_above_threshold[-1]] -= very_last_remaining
         elif very_last_remaining >= 1:
             floored_sizes[indices_above_threshold[-1]] -= very_last_remaining
         elif very_last_remaining != 0:

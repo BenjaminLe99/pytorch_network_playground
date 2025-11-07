@@ -581,8 +581,8 @@ class StandardizeLayer(torch.nn.Module):  # noqa: F811
             std (torch.tensor, optional): Standard tensor. Defaults to torch.tensor(1.).
         """
         super().__init__()
-        self.mean = torch.nn.Buffer(torch.tensor(mean), persistent=True)
-        self.std = torch.nn.Buffer(torch.tensor(std), persistent=True)
+        self.mean = torch.nn.Buffer(mean.detach().clone(), persistent=True)
+        self.std = torch.nn.Buffer(std.detach().clone(), persistent=True)
 
     def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
         x = (x - self.mean) / self.std
@@ -813,6 +813,7 @@ class LBN(torch.nn.Module):
         eps: float = 1.0e-5,
     ) -> None:
         super().__init__()
+
 
         # validate features
         if features is None:
