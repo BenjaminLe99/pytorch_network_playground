@@ -1,5 +1,5 @@
 import torch
-from models import create_model
+from mymodels import recreate_simple
 from data.features import input_features
 from data.load_data import get_data, find_datasets
 from data.preprocessing import (
@@ -79,9 +79,8 @@ dataset_config = {
 layer_config = {
     "ref_phi_columns": ("res_dnn_pnet_vis_tau1", "res_dnn_pnet_vis_tau2"),
     "rotate_columns": ("res_dnn_pnet_bjet1", "res_dnn_pnet_bjet2", "res_dnn_pnet_fatjet", "res_dnn_pnet_vis_tau1", "res_dnn_pnet_vis_tau2"),
-    "nodes": 128,
-    "num_resblocks": 3,
-    "activation_functions": "SiLu",
+    "layers_and_nodes": [128,128,128,128,128,128],
+    "activation_functions": "elu",
     "embedding_dim": 4,
     "empty_value": 15,
     "eps": 0.5e-5,
@@ -98,8 +97,8 @@ config = {
     "k_fold" : 5,
     "seed" : 1,
     "train_ratio" : 0.75,
-    "modelname": "very_long_test",
-    "max_iteration": 100000,
+    "modelname": "simple_recreated_test",
+    "max_iteration": 10000,
     "validation_interval": 200,
     "v_batch_size" : 4096 * 8,
     "t_batch_size" : 4096,
@@ -147,7 +146,7 @@ for current_fold in (config["train_folds"]):
 
 
     ### Model setup
-    models_input_layer, model = create_model.init_layers(dataset_config["continous_features"], dataset_config["categorical_features"], config=layer_config)
+    models_input_layer, model = recreate_simple.init_layers(dataset_config["continous_features"], dataset_config["categorical_features"], config=layer_config)
     model = model.to(DEVICE)
 
     # TODO: only linear models should contribute to weight decay
