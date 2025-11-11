@@ -19,7 +19,8 @@ def torch_export(model, dst_path, input_tensors):
     )
 
     p = Path(f"{dst_path}").with_suffix(".pt2")
-    torch.export.save(exp, p)
+    torch.export.save(exp, p, pickle_protocol=4)
+
 
 
 def run_exported_tensor_model(pt2_path, input_tensors):

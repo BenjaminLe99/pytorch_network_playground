@@ -7,18 +7,21 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+def hash_config(config):
+    h = tuple(config.items())
+    h = hashlib.sha256(str(h).encode("utf-8")).hexdigest()[:10]
+    p = pathlib.Path(os.environ["CACHE_DIR"])
+
+    if not p.exists():
+        raise FileExistsError("Cache dir does not exist")
+    return p / h
+
 class DataCacher():
     def __init__(self, config):
         self.path = self.cache_dir(config)
 
     def cache_dir(self, config):
-        h = tuple(config.items())
-        h = hashlib.sha256(str(h).encode("utf-8")).hexdigest()[:10]
-        p = pathlib.Path(os.environ["CACHE_DIR"])
-
-        if not p.exists():
-            raise FileExistsError("Cache dir does not exist")
-        return p / h
+        return hash_config(config)
 
     def create_cache_dir(self):
         self.path.mkdir(parents=False, exist=False)

@@ -1,12 +1,20 @@
+# standard imports
 import torch
+import os
+import matplotlib.pyplot as plt
+
+
+# project imports
 from models import create_model
 from data.features import input_features
 from data.load_data import get_data, find_datasets
 from data.preprocessing import (
     create_train_and_validation_sampler, get_batch_statistics, split_k_fold_into_training_and_validation, test_sampler
     )
-from utils.logger import get_logger
-from ml_save import torch_export
+from utils.logger import get_logger, TensorboardLogger
+import plotting
+import metrics
+from data.cache import hash_config
 
 CPU = torch.device("cpu")
 CUDA = torch.device("cuda")
@@ -26,15 +34,22 @@ def training(model, loss_fn, optimizer, sampler):
     loss = loss_fn(pred, targets.reshape(-1,3))
     loss.backward()
     optimizer.step()
-    return loss
+    return loss, (pred, targets)
 
+def correct_predictions(y_true, y_pred):
+    predicted_class = torch.argmax(y_pred, dim=1)
+    true_class = torch.argmax(y_true, dim=1)
+    correct = (predicted_class == true_class).sum().item()
+    return correct
 
 def validation(model, loss_fn, sampler):
     with torch.no_grad():
-        print("Starting Validation:")
         # run validation every x steps
         val_loss = []
         model.eval()
+        predictions = []
+        truth = []
+        weights = []
 
         for uid, validation_batch_generator in sampler.get_dataset_batch_generators(
             batch_size=sampler.batch_size,
@@ -42,21 +57,29 @@ def validation(model, loss_fn, sampler):
             device=DEVICE
             ).items():
             dataset_losses = []
-
             for cont, cat, tar in validation_batch_generator:
                 cat, cont, tar = cat.to(DEVICE), cont.to(DEVICE), tar.to(DEVICE)
                 val_pred = model((cat, cont))
 
                 loss = loss_fn(val_pred, tar.reshape(-1, 3))
+
                 dataset_losses.append(loss)
+
+                predictions.append(torch.softmax(val_pred, dim=1).cpu())
+                truth.append(tar.cpu())
+                weights.append(torch.full(size=(val_pred.shape[0], 1), fill_value=sampler[uid].relative_weight).cpu())
+            # create event based weight tensor for dataset
 
             average_val = sum(dataset_losses) / len(dataset_losses) * sampler[uid].relative_weight
             val_loss.append(average_val)
 
-            # print(f"dataset: {uid}, val_loss contribution {average_val:.4f}")
-        final_validation_loss = sum(val_loss)#/ len(val_loss)
+        final_validation_loss = sum(val_loss).cpu()#/ len(val_loss)
         model.train()
-        return final_validation_loss
+
+        truth = torch.concatenate(truth, dim=0)
+        predictions = torch.concatenate(predictions, dim=0)
+        weights = torch.flatten(torch.concatenate(weights, dim=0))
+        return final_validation_loss, (predictions, truth, weights)
 
 
 # load data
@@ -64,7 +87,7 @@ era_map = {"22pre": 0, "22post": 1, "23pre": 2, "23post": 3}
 datasets =  find_datasets(["dy_*","tt_*", "hh_ggf_hbb_htt_kl0_kt1*"], list(era_map.keys()), "root")
 debugging = False
 continous_features, categorical_features = input_features(debug=debugging, debug_length=3)
-
+target_map = {"hh" : 0, "dy": 1, "tt": 2}
 
 dataset_config = {
     "min_events": 3,
@@ -105,6 +128,8 @@ config = {
     "t_batch_size" : 4096,
 }
 
+tboard_writer = TensorboardLogger(name=hash_config(config))
+logger.warn(f"Tensorboard logs are stored in {tboard_writer.path}")
 
 for current_fold in (config["train_folds"]):
     logger.info(f'Start Training of fold {current_fold} from {config["k_fold"] - 1}')
@@ -141,7 +166,7 @@ for current_fold in (config["train_folds"]):
         v_data = validation_data,
         t_batch_size = config["t_batch_size"],
         v_batch_size = config["v_batch_size"],
-        target_map={"hh" : 0, "dy": 1, "tt": 2},
+        target_map=target_map,
         min_size=1
     )
 
@@ -161,24 +186,76 @@ for current_fold in (config["train_folds"]):
     LOG_INTERVAL = 10
     validation_interval = config["validation_interval"]
     model.train()
-    running_loss = 0.0
 
     # training loop:
 
+
+    v_losses = []
+    t_losses = []
     for iteration in range(max_iteration):
-        loss = training(
+        t_loss, (t_pred, t_targets) = training(
             model = model,
             loss_fn = loss_fn,
             optimizer = optimizer,
             sampler = training_sampler
         )
-        running_loss += loss.item()
-        if iteration % LOG_INTERVAL == 0:
-            print(f"Step {iteration} Loss: {loss.item():.4f}")
 
-        if iteration % validation_interval == 0:
-            val_loss = validation(model, loss_fn, validation_sampler)
-            print(f"Step {iteration} Validation Loss: {val_loss:.4f}")
+        if (iteration % validation_interval == 0) and (iteration > 0):
+            v_loss, (v_pred, v_tar, v_weights) = validation(model, loss_fn, validation_sampler)
+            # loss curve plot
+            loss_fig, loss_ax = plt.subplots()
+            v_losses.append(v_loss.item())
+            t_losses.append(t_loss.item())
+            loss_ax.plot(list(range(0, iteration, validation_interval)), v_losses, color="blue", label="validation loss")
+            loss_ax.plot(list(range(0, iteration, validation_interval)), t_losses, color="orange", label="training loss")
+
+
+            # network prediction plot
+            pred_fig, pred_ax = plotting.network_predictions(
+                v_tar,
+                v_pred,
+                target_map
+            )
+            # confusion matrix plot
+            c_mat_fig, c_mat_ax, c_mat = plotting.confusion_matrix(
+                v_tar,
+                v_pred,
+                target_map,
+                sample_weight=v_weights,
+                normalized="true"
+            )
+
+            roc_fig, roc_ax = plotting.roc_curve(v_tar, v_pred, sample_weight=v_weights, labels=list(target_map.keys()))
+            # tensorboard logging:
+            tboard_writer.log_loss({"train": t_loss, "validation": v_loss}, step=iteration)
+            tboard_writer.log_lr(optimizer.param_groups[0]["lr"], step=iteration)
+            tboard_writer.log_figure("confusion matrix validation", c_mat_fig, step=iteration)
+            tboard_writer.log_figure("node output validation", pred_fig, step=iteration)
+            tboard_writer.log_figure("roc curve one vs rest", roc_fig, step=iteration)
+
+            # TODO: metrics calculation
+            _metrics = metrics.calculate_metrics(
+                v_tar,
+                v_pred,
+                label=list(target_map.keys()),
+                weights=v_weights,
+            )
+
+            tboard_writer.log_precision(_metrics, step=iteration)
+            tboard_writer.log_sensitivity(_metrics, step=iteration)
+
+        # VERBOSITY
+        if iteration % LOG_INTERVAL == 0:
+            print(f"iteration: {iteration} - batch loss: {t_loss.item():.4f}")
+        if (iteration % validation_interval == 0) and (iteration > 0):
+            print(f"Step {iteration} Validation Loss: {v_loss:.4f}")
     # TODO release DATA from previous RUN
 
-torch_export(model.to(CPU), config["modelname"], training_sampler.sample_batch(device=CPU))
+    # save network
+    import export
+    cont, cat, tar = training_sampler.sample_batch(device=CPU)
+    export.torch_export(
+        model = model.to(CPU),
+        dst_path = f"models/fold_{current_fold}_final_model.pt2",
+        input_tensors = (cat.to(torch.int32), cont)
+    )

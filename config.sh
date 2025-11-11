@@ -7,3 +7,5 @@ export ML_ENV="ml_pytorch"
 #export PYENV_ROOT="/afs/desy.de/user/w/wiedersb/.pyenv/"
 export PYTHONPATH=$(pwd)/src
 echo "config loaded."
+export PYENV_ROOT="/afs/desy.de/user/w/wiedersb/.pyenv/"
+export TENSORBOARD_DIR=${STORE_DIR}/tensorboard
