@@ -122,7 +122,8 @@ config = {
     "seed" : 1,
     "train_ratio" : 0.75,
     "modelname": "very_long_test",
-    "max_iteration": 100000,
+    "max_iteration": 10000,
+    "scheduler_intervall":100,
     "validation_interval": 200,
     "v_batch_size" : 4096 * 8,
     "t_batch_size" : 4096,
@@ -183,6 +184,7 @@ for current_fold in (config["train_folds"]):
     # HINT: requires only logits, no softmax at end
     loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
     max_iteration = config["max_iteration"]
+    scheduler_intervall = config["scheduler_intervall"]
     LOG_INTERVAL = 10
     validation_interval = config["validation_interval"]
     model.train()
@@ -249,6 +251,10 @@ for current_fold in (config["train_folds"]):
             print(f"iteration: {iteration} - batch loss: {t_loss.item():.4f}")
         if (iteration % validation_interval == 0) and (iteration > 0):
             print(f"Step {iteration} Validation Loss: {v_loss:.4f}")
+            
+        if iteration % scheduler_intervall == 0:
+            scheduler.step()
+            print(f"Step {iteration} reached, lowering learning rate.")
     # TODO release DATA from previous RUN
 
     # save network
@@ -259,3 +265,9 @@ for current_fold in (config["train_folds"]):
         dst_path = f"models/fold_{current_fold}_final_model.pt2",
         input_tensors = (cat.to(torch.int32), cont)
     )
+
+        
+
+    # TODO release DATA from previous RUN
+
+#torch_export(model.to(CPU), config["modelname"], training_sampler.sample_batch(device=CPU))

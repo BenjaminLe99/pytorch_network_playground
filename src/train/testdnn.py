@@ -57,6 +57,13 @@ def validation(model, loss_fn, sampler):
         final_validation_loss = sum(val_loss)#/ len(val_loss)
         model.train()
         return final_validation_loss
+    
+def init_weights_he_uniform(model):
+    if isinstance(model, torch.nn.Linear):  # includes subclasses
+        torch.nn.init.kaiming_uniform_(model.weight, nonlinearity='relu')
+        if model.bias is not None:
+            torch.nn.init.zeros_(model.bias)
+
 
 
 # load data
@@ -81,7 +88,7 @@ layer_config = {
     "rotate_columns": ("res_dnn_pnet_bjet1", "res_dnn_pnet_bjet2", "res_dnn_pnet_fatjet", "res_dnn_pnet_vis_tau1", "res_dnn_pnet_vis_tau2"),
     "layers_and_nodes": [128,128,128,128,128,128],
     "activation_functions": "elu",
-    "embedding_dim": 4,
+    "embedding_dim": 10,
     "empty_value": 15,
     "eps": 0.5e-5,
     "linear_layer_normalization": False,
@@ -90,16 +97,18 @@ layer_config = {
 }
 
 config = {
-    "lr":1e-2,
-    "gamma":0.9,
+    "lr":10e-3,
+    "learning_rate_reduction_factor":0.5,
+    "weight_decay": 5000,
     "label_smoothing":0,
     "train_folds" : (0,),
     "k_fold" : 5,
     "seed" : 1,
     "train_ratio" : 0.75,
-    "modelname": "simple_recreated_test",
+    "modelname": "simple_recreated_test_ReLu",
     "max_iteration": 10000,
-    "validation_interval": 200,
+    "scheduler_intervall": 810,
+    "validation_interval": 500,
     "v_batch_size" : 4096 * 8,
     "t_batch_size" : 4096,
 }
@@ -144,23 +153,35 @@ for current_fold in (config["train_folds"]):
         min_size=1
     )
 
-
     ### Model setup
     models_input_layer, model = recreate_simple.init_layers(dataset_config["continous_features"], dataset_config["categorical_features"], config=layer_config)
     model = model.to(DEVICE)
+    model.apply(init_weights_he_uniform) #apply he uniform weight initialization
+
+    # get the number of trainable weights
+    num_trainable_weights = sum(
+        p.numel() for name, p in model.named_parameters() 
+        if p.requires_grad and "weight" in name
+    )
+
+    # normalize the weight decay parameter
+    config["weight_decay"] = 500/num_trainable_weights
 
     # TODO: only linear models should contribute to weight decay
     # TODO : SAMW Optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config["lr"])
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer, gamma=config["gamma"])
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"])
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer, gamma=config["learning_rate_reduction_factor"])
 
     # HINT: requires only logits, no softmax at end
     loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
     max_iteration = config["max_iteration"]
+    scheduler_intervall = config["scheduler_intervall"]
     LOG_INTERVAL = 10
     validation_interval = config["validation_interval"]
     model.train()
     running_loss = 0.0
+    best_loss = 0.0
+    best_iteration = 0
 
     # training loop:
 
@@ -178,6 +199,22 @@ for current_fold in (config["train_folds"]):
         if iteration % validation_interval == 0:
             val_loss = validation(model, loss_fn, validation_sampler)
             print(f"Step {iteration} Validation Loss: {val_loss:.4f}")
+        
+        # learningrate scheduler. Save best loss and iteration, compare until 10 iterations after -> reduce learningrate
+        if loss.item() > best_loss:
+            best_loss = loss.item()
+            best_iteration = iteration
+            if best_iteration < 10:
+                pass
+            else:
+                scheduler.step()
+            
+
+
+        # if iteration != 0 and iteration % scheduler_intervall == 0:
+        #     scheduler.step()
+        #     print(f"Step {iteration} reached, lowering learning rate.")
+
     # TODO release DATA from previous RUN
 
 torch_export(model.to(CPU), config["modelname"], training_sampler.sample_batch(device=CPU))
