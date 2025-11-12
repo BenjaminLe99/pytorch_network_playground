@@ -37,7 +37,7 @@ class ColoredFormatter(logging.Formatter):
 
 class TensorboardLogger():
     def __init__(self, name=None):
-        self.path = Path(self.log_dir) / name
+        self.path = Path(self.log_dir) / name.stem
         self.writer = self.create_tensorboard_writer(log_dir=self.path)
 
     def log_scalar(self, tag, value, step):
@@ -71,7 +71,6 @@ class TensorboardLogger():
     @property
     def log_dir(self):
         return os.environ["TENSORBOARD_DIR"]
-
 
     def create_tensorboard_writer(self, config=None, log_dir=None):
         # TODO: THINK about location of writer? Should it be inside the hashed dir?

@@ -70,7 +70,6 @@ class EraDataset(t_data.Dataset):
             # when required number is too big, set it to len of self to return all data
             number = len(self)
 
-
         start_idx = self.current_idx
         # do not drop last, but instead create smaller batch
         next_idx = min(self.current_idx + number, len(self))
@@ -81,31 +80,36 @@ class EraDataset(t_data.Dataset):
         self.current_idx = next_idx
         return data
 
-    def batch_generator(self, batch_size=None, reset=True, device=torch.device("cpu")):
+    def batch_generator(self, batch_size=None, device=torch.device("cpu")):
         """
-        Creates a generator that returns the input and target tensors batch-wise with size *batch_size*.
+        Creates a generator object that returns the input and target tensors batch-wise with size *batch_size*.
         If *batch_size* is returned as None, the whole underlying data is returned at once.
-        By default a new generator creates a new layout of indicies it samples from.
-        Setting *reset* to false disables this behavior. Thus multiple generators with different
-        sample sizes use the same underlying data as basis.
+        The generator does not randomize the underlying data. The generator and sample methods can be used
+        independently.
 
         Args:
             batch_size (int, optional): Sample size per iteration, if None all data is returned at once. Defaults to None.
-            reset (bool, optional): Resets generator sample counter
+            device (torch.device, optional): Device to which tensors are moved before yielding. Defaults to torch.device("cpu").
 
         Yields:
             tuple (torch.Tensor): Tuple with 3 torch tensors for categorical, continous and target data
         """
-        if reset:
-            self.reset()
 
-        while self.current_idx < len(self):
-            cont, cat, tar  = self.sample(batch_size)
+        # save current state of the sampler to restore after full iteration
+        # HINT: Do not mix sample with batch generator, as both manipulate current_idx
+        start_idx, next_idx = 0, 0
+        indices = torch.arange(len(self))
+        if batch_size is None:
+            batch_size = len(self)
 
-            # yield self.sample(batch_size)
+        while next_idx < len(self):
+            # handle windowing of indices
+            next_idx = min(start_idx + batch_size, len(self))
+            idx = indices[start_idx:next_idx]
+            start_idx = next_idx
+            # reset if we reached the end of the dataset and drop last incomplete batch
+            cont, cat, tar = self.continous_input[idx], self.categorical_input[idx],self.targets[idx]
             yield cont.to(device), cat.to(device), tar.to(device)
-
-
 
 class EraDatasetSampler(t_data.Sampler):
     def __init__(

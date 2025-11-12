@@ -208,14 +208,13 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
 def get_data(config, _save_cache = True, overwrite=False):
     # find cache if exists and recreate sample with this
     # else prepare data if not cache exist
-
     cacher = DataCacher(config=config)
 
     # when cache exist load it and return the data
     if not overwrite and cacher.path.exists():
         events = cacher.load_cache()
     else:
-        logger.info("Prepare Loading of data:")
+        logger.info("Prepare loading and filtering of data:")
         cont_feat, cat_feat = config["continous_features"], config["categorical_features"]
         # load the data in {pid : awkward}
         events = load_data(
