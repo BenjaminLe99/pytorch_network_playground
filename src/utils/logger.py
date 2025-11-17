@@ -49,17 +49,17 @@ class TensorboardLogger():
     def log_lr(self, value, step):
         self.writer.add_scalar("Learning_Rate", value, step)
 
-    def log_precision(self, values, step):
+    def log_precision(self, values, step, mode="train"):
         acc = {k : v["precision"] for k, v in values.items()}
-        self.writer.add_scalars("Precision", acc, step)
+        self.writer.add_scalars(f"{mode} Precision", acc, step)
 
-    def log_f1(self, values, step):
+    def log_f1(self, values, step, mode="train"):
         acc = {k : v["f1"] for k, v in values.items()}
-        self.writer.add_scalars("F1-Score", acc, step)
+        self.writer.add_scalars(f"{mode} F1-Score", acc, step)
 
-    def log_sensitivity(self, values, step):
+    def log_sensitivity(self, values, step, mode="train"):
         acc = {k: v["sensitivity"] for k, v in values.items()}
-        self.writer.add_scalars("Recall", acc, step)
+        self.writer.add_scalars(f"{mode} Recall", acc, step)
 
     def log_histogram(self, tag, values, step):
         self.writer.add_histogram(tag, values, step)

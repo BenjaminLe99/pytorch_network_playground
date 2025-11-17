@@ -58,6 +58,8 @@ def find_datasets(dataset_patterns: str, year_patterns: str, file_type: str="roo
                 size = round(sum(os.path.getsize(f) for f in files) / (1024**2),2)
                 logger.info(f"+{len(files)} files | size {size} MB | {year}/{dataset.name}")
                 data[year][dataset.name] = files
+    if not data:
+        raise ValueError("No datasets found with given patterns")
     return data
 
 def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], str, None]=None, cut=None) -> ak.Array:

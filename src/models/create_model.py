@@ -49,3 +49,53 @@ def init_layers(continous_features, categorical_features, config):
         # no softmax since this is already part of loss
     )
     return input_layer, model
+
+class BNet(torch.nn.Module):
+    def __init__(self, continous_features, categorical_features, config, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.init_layers(config=config, continous_features=continous_features, categorical_features=categorical_features)
+
+    def init_layers(self, continous_features, categorical_features, config):
+        # increasing eps helps to stabilize training to counter batch norm and L2 reg counterplay when used together.
+        eps = 0.5e-5
+        # activate weight normalization on linear layer weights
+        normalize = False
+
+        # helper where all layers are defined
+        # std layers are filled when statitics are known
+        self.std_layer = StandardizeLayer(mean=config["mean"], std=config["std"])
+
+        self.continuous_padding = PaddingLayer(padding_value=0, mask_value=EMPTY_FLOAT)
+        self.categorical_padding = PaddingLayer(padding_value=config["empty_value"], mask_value=EMPTY_INT)
+        # self.rotation_layer = RotatePhiLayer(
+        #     columns=list(map(str, continous_features)),
+        #     ref_phi_columns=config["ref_phi_columns"],
+        #     rotate_columns=config["rotate_columns"],
+        # )
+        self.input_layer = InputLayer(
+            continuous_inputs=continous_features,
+            categorical_inputs=categorical_features,
+            embedding_dim=10,
+            expected_categorical_inputs=embedding_expected_inputs,
+            empty=config["empty_value"],
+            std_layer=self.std_layer,
+            # rotation_layer=rotation_layer,
+            rotation_layer=None,
+            padding_categorical_layer=self.categorical_padding,
+            padding_continous_layer=self.continuous_padding,
+        )
+
+        self.transition_dense_1 = DenseBlock(input_nodes = self.input_layer.ndim, output_nodes = config["nodes"], activation_functions=config["activation_functions"], eps=eps, normalize=normalize) # noqa
+        self.resnet_block_1 = ResNetPreactivationBlock(config["nodes"], config["activation_functions"], config["skip_connection_init"], config["freeze_skip_connection"], eps=eps, normalize=normalize)
+        self.resnet_block_2 = ResNetPreactivationBlock(config["nodes"], config["activation_functions"], config["skip_connection_init"], config["freeze_skip_connection"], eps=eps, normalize=normalize)
+        self.resnet_block_3 = ResNetPreactivationBlock(config["nodes"], config["activation_functions"], config["skip_connection_init"], config["freeze_skip_connection"], eps=eps, normalize=normalize)
+        self.last_linear = torch.nn.Linear(config["nodes"], 3)
+
+    def forward(self, categorical_inputs, continuous_inputs):
+        x = self.input_layer(categorical_inputs=categorical_inputs, continuous_inputs=continuous_inputs)
+        x = self.transition_dense_1(x)
+        x = self.resnet_block_1(x)
+        x = self.resnet_block_2(x)
+        x = self.resnet_block_3(x)
+        x = self.last_linear(x)
+        return x
