@@ -147,7 +147,7 @@ def roc_curve(target, pred, sample_weight=None, labels=None, **kwargs):
             sample_weight=sample_weight.reshape(-1, 1),
             ax=ax,
             name=name,
-            curve_kwargs={"color": col},
+            #curve_kwargs={"color": col},
             )
     _ = ax.set(xlabel="False Positive Rate", ylabel="True Positive Rate")
     return disp.figure_, disp.ax_

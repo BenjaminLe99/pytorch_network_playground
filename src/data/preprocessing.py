@@ -161,7 +161,6 @@ def split_k_fold_into_training_and_validation(events_dict, c_fold, k_fold, seed,
     Returns:
         dict(torch.tensor): Train and validation dictionary
     """
-    #from IPython import embed;embed(header=" string - 160 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/data/preprocessing.py")
     train, valid = {}, {}
     for uid in list(events_dict.keys()):
         array = events_dict.pop(uid)

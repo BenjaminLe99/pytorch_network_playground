@@ -79,7 +79,7 @@ class CategoricalTokenizer(torch.nn.Module):  # noqa: F811
         self,
         categories: tuple[str ],
         expected_categorical_inputs: dict[str, list[int]],
-        empty: int = 15,
+        empty: int = None,
     ):
         """
         Initializes tokenizer for given *expected_categorical_inputs*.
@@ -99,7 +99,7 @@ class CategoricalTokenizer(torch.nn.Module):  # noqa: F811
                 Defaults to 15.
         """
         super().__init__()
-        self._expected_inputs, self._empty = self.setup(categories, expected_categorical_inputs, empty)
+        self._expected_inputs, self._empty = self.setup(categories, expected_categorical_inputs, None)
 
         # setup lookuptable, returns dummy if None
         _map, _min = self.LookUpTable(self.pad_to_longest())
@@ -145,7 +145,7 @@ class CategoricalTokenizer(torch.nn.Module):  # noqa: F811
         # check empty for faulty values
         # add empty category with value of empty to each value
         expected_inputs = copy.deepcopy(expected_inputs)
-        empty = _empty(expected_inputs, empty)
+        # empty = _empty(expected_inputs, empty)
         _expected_inputs = {}
         for categorie in map(str, categories):
             try: 
@@ -154,7 +154,7 @@ class CategoricalTokenizer(torch.nn.Module):  # noqa: F811
                 from IPython import embed
                 embed()
             data = expected_inputs[categorie]
-            data.append(empty)
+            # data.append(empty)
             _expected_inputs[categorie] = data
         return _expected_inputs, empty
 

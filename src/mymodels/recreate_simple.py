@@ -16,7 +16,7 @@ def init_layers(continous_features, categorical_features, config):
     # std layers are filled when statitics are known
     std_layer = StandardizeLayer(mean=config["mean"], std=config["std"])
 
-    continuous_padding = PaddingLayer(padding_value=0, mask_value=EMPTY_FLOAT)
+    continuous_padding = PaddingLayer(padding_value=-4, mask_value=EMPTY_FLOAT)
     categorical_padding = PaddingLayer(padding_value=config["empty_value"], mask_value=EMPTY_INT)
     # rotation_layer = RotatePhiLayer(
     #     columns=list(map(str, continous_features)),

@@ -66,12 +66,12 @@ embedding_expected_inputs = {
     "res_dnn_pnet_pair_type": [0, 1, 2],  # see mapping below
     "res_dnn_pnet_dm1": [-1, 0, 1, 10, 11],  # -1 for e/mu
     "res_dnn_pnet_dm2": [0, 1, 10, 11],
-    "res_dnn_pnet_vis_tau1_charge": [-1, 1, 0],
-    "res_dnn_pnet_vis_tau2_charge": [-1, 1, 0],
+    "res_dnn_pnet_vis_tau1_charge": [-1, 1],
+    "res_dnn_pnet_vis_tau2_charge": [-1, 1],
     "res_dnn_pnet_has_fatjet": [0, 1],  # whether a selected fatjet is present
     "res_dnn_pnet_has_jet_pair": [0, 1],  # whether two or more jets are present
     # 0: 2016APV, 1: 2016, 2: 2017, 3: 2018, 4: 2022preEE, 5: 2022postEE, 6: 2023pre, 7: 2023post
-    "res_dnn_pnet_year_flag": [0, 1, 2, 3, 4, 5, 6, 7],
+    # "res_dnn_pnet_year_flag": [0, 1, 2, 3, 4, 5, 6, 7],
     "channel_id": [1, 2, 3],
 }
 # embedding_expected_inputs = {
