@@ -3,7 +3,7 @@ import torch
 from collections import defaultdict
 from utils.logger import get_logger
 
-from data.datasets import EraDataset, EraDatasetSampler
+from data.datasets import Dataset, DatasetSampler
 
 logger = get_logger(__name__)
 
@@ -70,7 +70,7 @@ def get_batch_statistics_per_dataset(events, padding_value=0):
     # filter keys after processes
     keys_per_process = defaultdict(list)
     for uid in events.keys():
-        (era, ds_type, pid) = uid
+        (ds_type, pid) = uid
         keys_per_process[ds_type].append(uid)
 
     stats = {}
@@ -191,9 +191,9 @@ def split_k_fold_into_training_and_validation(events_dict, c_fold, k_fold, seed,
 
 def create_train_or_validation_sampler(events, target_map, batch_size, min_size=1, train=True):
     # extract data from events and wrap into Datasets
-    EraDatasetManager = EraDatasetSampler(None, batch_size=batch_size, min_size=min_size)
+    DatasetManager = DatasetSampler(None, batch_size=batch_size, min_size=min_size)
     for uid in list(events.keys()):
-        (era, dataset_type, process_id) = uid
+        (dataset_type, process_id) = uid
         arrays = events.pop(uid)
 
         # create target tensor from uid
@@ -202,22 +202,21 @@ def create_train_or_validation_sampler(events, target_map, batch_size, min_size=
         target = torch.zeros(size=(num_events, len(target_map)), dtype=torch.float32)
         target[:, target_value] = 1.
 
-        era_dataset = EraDataset(
+        era_dataset = Dataset(
             continous_tensor=arrays["continous"],
             categorical_tensor=arrays["categorical"],
             target=target,
             weight=arrays["weight"],
             name=process_id,
-            era=era,
             dataset_type=dataset_type,
         )
-        EraDatasetManager.add_dataset(era_dataset)
-        logger.info(f"Add {dataset_type} pid: {process_id} of era: {era}")
+        DatasetManager.add_dataset(era_dataset)
+        logger.info(f"Add {dataset_type} pid: {process_id}")
 
     if train:
-        for ds_type in EraDatasetManager.keys:
-            EraDatasetManager.calculate_sample_size(dataset_type=ds_type)
-    return EraDatasetManager
+        for ds_type in DatasetManager.keys:
+            DatasetManager.calculate_sample_size(dataset_type=ds_type)
+    return DatasetManager
 
 def create_train_and_validation_sampler(t_data, v_data, t_batch_size, v_batch_size, target_map={"hh" : 0, "dy": 1, "tt": 2}, min_size=1):
     train_sampler = create_train_or_validation_sampler(
@@ -244,13 +243,16 @@ def create_train_and_validation_sampler(t_data, v_data, t_batch_size, v_batch_si
 
 
 def test_sampler(events, target_map, batch_size, min_size=1, train=True):
-    # Function to test a sampler that is actually doing the right thing
+    # FIXME: Test sampler does not work currently due to the fact that a
+    # accumulation across eras is done.
 
+    # Function to test a sampler that is actually doing the right thing
+    raise NotImplementedError("Test Sampler is not implemented for era accumulated Data")
     # extract data from events and wrap into Datasets
     ERA_MAP = {"22pre": 0, "22post":1, "23pre":2, "23post":3}
-    EraDatasetManager = EraDatasetSampler(None, batch_size=batch_size, min_size=min_size)
+    DatasetManager = DatasetSampler(None, batch_size=batch_size, min_size=min_size)
     for uid in list(events.keys()):
-        (era, dataset_type, process_id) = uid
+        (dataset_type, process_id) = uid
         # create target tensor from uid
         num_events = len(events[uid]["continous"])
         target_value = target_map[dataset_type]
@@ -260,7 +262,7 @@ def test_sampler(events, target_map, batch_size, min_size=1, train=True):
         era_tensor = torch.full(size=(num_events,), fill_value=ERA_MAP[era], dtype=torch.int32)
         process_id_tensor = torch.full(size=(num_events,), fill_value=process_id, dtype=torch.int32)
 
-        era_dataset = EraDataset(
+        era_dataset = Dataset(
             continous_tensor=process_id_tensor,
             categorical_tensor=era_tensor,
             target=target,
@@ -269,14 +271,14 @@ def test_sampler(events, target_map, batch_size, min_size=1, train=True):
             era=era,
             dataset_type=dataset_type,
         )
-        EraDatasetManager.add_dataset(era_dataset)
+        DatasetManager.add_dataset(era_dataset)
         logger.info(f"Add {dataset_type} pid: {process_id} of era: {era}")
 
     if train:
-        for ds_type in EraDatasetManager.keys:
-            EraDatasetManager.calculate_sample_size(dataset_type=ds_type)
+        for ds_type in DatasetManager.keys:
+            DatasetManager.calculate_sample_size(dataset_type=ds_type)
 
-    sample_sizes_per_ds = EraDatasetManager.get_attribute_of_datasets("sample_size")
+    sample_sizes_per_ds = DatasetManager.get_attribute_of_datasets("sample_size")
     sample_sizes_per_ds = {(ERA_MAP[era],pid): events for (era,pid), events in sample_sizes_per_ds.items()}
 
     def batch_comparison(sample_size_per_ds, batch):
@@ -288,8 +290,8 @@ def test_sampler(events, target_map, batch_size, min_size=1, train=True):
             key = (era_v.item(), pid_v.item())
             d[key] -= 1
         return d
-    ds = EraDatasetManager
+    ds = DatasetManager
     from IPython import embed; embed(header="string - 256 in preprocessing.py ")
 
 
-    return EraDatasetManager
+    return DatasetManager

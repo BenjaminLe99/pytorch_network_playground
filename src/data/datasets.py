@@ -5,7 +5,7 @@ from collections import defaultdict
 from utils.logger import get_logger
 logger = get_logger(__name__)
 
-class EraDataset(t_data.Dataset):
+class Dataset(t_data.Dataset):
     def __init__(
         self,
         continous_tensor: torch.Tensor,
@@ -13,7 +13,6 @@ class EraDataset(t_data.Dataset):
         target: torch.Tensor,
         weight: torch.Tensor=None,
         name: str=None,
-        era: str=None,
         dataset_type: str=None,
         randomize: bool =True
     ):
@@ -22,7 +21,6 @@ class EraDataset(t_data.Dataset):
         self.targets = target
         self.weight = weight
         self.name = name
-        self.era = era
         self.randomize = randomize
         self.reset()
         self.dataset_type = dataset_type
@@ -31,7 +29,7 @@ class EraDataset(t_data.Dataset):
 
     @property
     def uid(self):
-        return (self.era, self.dataset_type, self.name)
+        return (self.dataset_type, self.name)
 
     def __len__(self):
         return self.targets.shape[0]
@@ -111,7 +109,7 @@ class EraDataset(t_data.Dataset):
             cont, cat, tar = self.continous_input[idx], self.categorical_input[idx],self.targets[idx]
             yield cont.to(device), cat.to(device), tar.to(device)
 
-class EraDatasetSampler(t_data.Sampler):
+class DatasetSampler(t_data.Sampler):
     def __init__(
         self,
         datasets_inst=None,
@@ -120,7 +118,7 @@ class EraDatasetSampler(t_data.Sampler):
         min_size = None,
         ):
         self.total_weight = {"dy":0, "tt":0, "hh":0}
-        self.dataset_inst = defaultdict(dict)  # {dataset_type: {(era, process_id): dataset}}
+        self.dataset_inst = defaultdict(dict)  # {dataset_type: {process_id: dataset}}
         self.batch_size = torch.tensor([batch_size], dtype=torch.int32)
         if datasets_inst is not None:
             for dataset in datasets_inst:
@@ -155,7 +153,7 @@ class EraDatasetSampler(t_data.Sampler):
         # {era : process_id: {array}}
         weight = dataset.weight
         self.total_weight[dataset.dataset_type] += weight
-        self.dataset_inst[dataset.dataset_type][(dataset.era, dataset.name)] = dataset
+        self.dataset_inst[dataset.dataset_type][dataset.name] = dataset
 
     @property
     def keys(self):
@@ -167,19 +165,18 @@ class EraDatasetSampler(t_data.Sampler):
         for dataset_type, uid in self.dataset_inst.items():
             total_batch = 0
             logger.info(f"{dataset_type}:")
-            for (era, pid), ds in uid.items():
-                logger.info(f"\t{pid} | {era} | {ds.sample_size}")
+            for (pid), ds in uid.items():
+                logger.info(f"\t{pid} | {ds.sample_size}")
                 total_batch += ds.sample_size
             logger.info(f"\tsum/expected: {total_batch}/{(self.sample_ratio[ds.dataset_type] * self.batch_size).item()}")
 
     def calculate_sample_size(self, dataset_type, dry=False):
         logger.info(f"Calculate sample sizes for: {dataset_type}")
-        # from IPython import embed; embed(header="string - 84 in datasets.py ")
         # unpack and convert to tensors for easier handling, get desired_sub_batch_size
         weights, keys = [], []
-        for (era, pid), ds in self.dataset_inst[dataset_type].items():
+        for pid, ds in self.dataset_inst[dataset_type].items():
             weights.append(ds.weight.item())
-            keys.append((era, pid))
+            keys.append(pid)
         weights = torch.tensor(weights, dtype=torch.float32)
         min_size = torch.tensor(self.min_size)
         sub_batch_size = int(self.batch_size * self.sample_ratio[dataset_type])
@@ -199,7 +196,7 @@ class EraDatasetSampler(t_data.Sampler):
         ideal_sizes = sub_batch_size * weights / total_weight
 
         # add relative weight to datasets
-        for (era, pid), ds in self.dataset_inst[dataset_type].items():
+        for pid, ds in self.dataset_inst[dataset_type].items():
             ds.relative_weight = ds.weight / total_weight * self.sample_ratio[dataset_type]
         # step 1:
 

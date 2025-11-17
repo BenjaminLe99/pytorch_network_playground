@@ -60,7 +60,16 @@ def find_datasets(dataset_patterns: str, year_patterns: str, file_type: str="roo
                 data[year][dataset.name] = files
     if not data:
         raise ValueError("No datasets found with given patterns")
-    return data
+
+    # merge over years era information is not needed
+    merged_over_era_data = {}
+    for era in list(data.keys()):
+        dataset_dict = data.pop(era)
+        for dataset, files in dataset_dict.items():
+            if dataset not in merged_over_era_data:
+                merged_over_era_data[dataset] = []
+            merged_over_era_data[dataset].extend(files)
+    return merged_over_era_data
 
 def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], str, None]=None, cut=None) -> ak.Array:
     """
@@ -91,7 +100,7 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
         "((channel_id == 1) | (channel_id == 2) | (channel_id == 3))",
     ]
 
-    if isinstance(cut, (str)):
+    if isinstance(cut, str):
         cut = [cut]
     if cut is None:
         cut = []
@@ -101,6 +110,7 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
     if isinstance(files_path, str):
         files_path = [files_path]
     arrays = []
+    logger.info(f"loading: {pathlib.Path(files_path[0]).parent}")
     for file_path in files_path:
         with uproot.open(file_path, object_cache=None, array_cache=None) as file:
             tree = file["events"]
@@ -175,19 +185,17 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
     def load_data_per_process_id(loader, datasets, config):
 
         data = {}
-        for year, year_data in datasets.items():
+        for dataset, files in datasets.items():
             # add events with structure {dataset_name : events}
-            for dataset, files in year_data.items():
-                # load inputs
-                events = loader(files, **config)
-
-                p_arrays = sort_by_process_id(events)
-                for pid, p_array in p_arrays:
-                    uid = (year,dataset[:2],pid)
-                    if uid not in data:
-                        data[uid] = []
-                    data[uid].append(p_array)
-                    logger.debug(f"{year} | {dataset} | PID: {pid} | {len(p_array)}")
+            # load inputs
+            events = loader(files, **config)
+            p_arrays = sort_by_process_id(events)
+            for pid, p_array in p_arrays:
+                uid = (dataset[:2],pid)
+                if uid not in data:
+                    data[uid] = []
+                data[uid].append(p_array)
+                logger.debug(f"{dataset} | PID: {pid} | {len(p_array)}")
         return data
 
     def merge_per_pid(data):
@@ -201,7 +209,6 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
             concat = np.concatenate(arrays, axis=0)
             data[uid] = concat
         return data
-
     loader, config = get_loader(file_type, columns=list(columns))
     data = load_data_per_process_id(loader, datasets, config)
     data = merge_per_pid(data)
@@ -216,7 +223,7 @@ def get_data(config, _save_cache = True, overwrite=False):
     if not overwrite and cacher.path.exists():
         events = cacher.load_cache()
     else:
-        logger.info("Prepare loading and filtering of data:")
+        logger.info("Start loading and filtering of data:")
         cont_feat, cat_feat = config["continous_features"], config["categorical_features"]
         # load the data in {pid : awkward}
         events = load_data(
@@ -275,7 +282,6 @@ def convert_numpy_to_torch(events, continous_features, categorical_features, dty
             for feature in (continous_features,categorical_features)
             ]
         # convert to torch
-
         weight = torch.tensor(np.sum(arr["normalization_weight"]), dtype = dtype)
         events[uid] = {
             "continous": continous_tensor,
