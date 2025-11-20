@@ -164,7 +164,7 @@ for current_fold in (config["train_folds"]):
         train_ratio=config["train_ratio"],
     )
     # get weighted mean and std of expected batch composition
-    #layer_config["mean"],layer_config["std"] = get_batch_statistics(train_data, padding_value=-99999)
+    layer_config["mean"],layer_config["std"] = get_batch_statistics(train_data, padding_value=-99999)
 
     # get marcels statistics
     def get_marcel_stats(layer_config):
@@ -225,18 +225,16 @@ for current_fold in (config["train_folds"]):
     # HINT: requires only logits, no softmax at end
     loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
     max_iteration = config["max_iteration"]
-    scheduler_intervall = config["scheduler_intervall"]
     LOG_INTERVAL = 10
     validation_interval = config["validation_interval"]
     model.train()
-    running_loss = 0.0
     validation_iteration = 0
     best_v_loss = 90000
     best_iteration = 0
     last_lr_drop = -1
     patience = config["patience"]
     early_stopping_patience = config["early_stopping_patience"]
-    best_state_dict = {}
+
 
     # training loop:
 

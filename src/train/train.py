@@ -69,10 +69,9 @@ for current_fold in (config["train_folds"]):
 
     # HINT: requires only logits, no softmax at end
     loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
-    max_iteration = config["max_iteration"]
-    scheduler_intervall = config["scheduler_intervall"]
+    max_iteration = 10000
     LOG_INTERVAL = 10
-    validation_interval = config["validation_interval"]
+    validation_interval = 200
     model.train()
 
     ### training loop:

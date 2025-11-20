@@ -9,6 +9,7 @@ def training(model, loss_fn, optimizer, sampler, device):
     cont, cat, targets = sampler.sample_batch(device=device)
     targets = targets.to(torch.float32)
 
+    #pred = model((cat,cont))
     pred = model(categorical_inputs=cat, continuous_inputs=cont)
 
     loss = loss_fn(pred, targets.reshape(-1,3))
@@ -35,6 +36,7 @@ def validation(model, loss_fn, sampler, device):
 
                 dataset_losses.append(loss)
 
+                #predictions.append(val_pred).cpu()
                 predictions.append(torch.softmax(val_pred, dim=1).cpu())
                 truth.append(tar.cpu())
                 weights.append(torch.full(size=(val_pred.shape[0], 1), fill_value=sampler[uid].relative_weight).cpu())

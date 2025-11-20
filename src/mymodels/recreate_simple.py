@@ -36,9 +36,8 @@ def init_layers(continous_features, categorical_features, config):
         padding_continous_layer=continuous_padding,
     )
 
-    model = torch.nn.Sequential(
-        input_layer,
-        DenseNetwork(
+    model = DenseNetwork(
+        input_layer=input_layer,
         input_nodes=input_layer.ndim,
         hidden_nodes=config["layers_and_nodes"],
         output_nodes=3,
@@ -47,26 +46,4 @@ def init_layers(continous_features, categorical_features, config):
         normalize=config["linear_layer_normalization"],
         )
         # no softmax since this is already part of loss
-    )
-
-    # model = SimpleNetRecreated(
-    #     input_layer=input_layer,
-    #     hidden_nodes=config["layers_and_nodes"],
-    #     activation=config["activation_functions"],
-    #     eps=config["eps"],
-    #     normalize=config["linear_layer_normalization"],
-    # )
-
-    # resnet_blocks = [
-    #     ResNetPreactivationBlock(config["nodes"], config["activation_functions"], config["skip_connection_init"], config["freeze_skip_connection"], eps=eps, normalize=normalize)
-    #     for num_blocks in range(config["num_resblocks"])
-    #     ]
-
-    # model = torch.nn.Sequential(
-    #     input_layer,
-    #     DenseBlock(input_nodes = input_layer.ndim, output_nodes = config["nodes"], activation_functions=config["activation_functions"], eps=eps, normalize=normalize), # noqa
-    #     *resnet_blocks,
-    #     torch.nn.Linear(config["nodes"], 3),
-    #     # no softmax since this is already part of loss
-    # )
     return model
