@@ -26,7 +26,7 @@ class DenseNetwork(torch.nn.Module):
 
         # Final output layer: sees all hidden outputs concatenated
         total_hidden = sum(hidden_nodes)
-        self.output_layer = torch.nn.Linear(total_hidden, output_nodes)
+        self.last_linear = torch.nn.Linear(total_hidden, output_nodes)
 
 
         # # Hidden layers (super-dense connections)

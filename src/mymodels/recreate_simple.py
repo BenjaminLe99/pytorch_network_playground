@@ -69,4 +69,4 @@ def init_layers(continous_features, categorical_features, config):
     #     torch.nn.Linear(config["nodes"], 3),
     #     # no softmax since this is already part of loss
     # )
-    return input_layer, model
+    return model
