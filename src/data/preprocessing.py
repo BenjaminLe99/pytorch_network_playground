@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 
 from collections import defaultdict
 from utils.logger import get_logger
@@ -6,6 +7,111 @@ from utils.logger import get_logger
 from data.datasets import Dataset, DatasetSampler
 
 logger = get_logger(__name__)
+
+
+def apply_tokenization(expected_inputs, events, categorical_features):
+    for uid in list(events.keys()):
+        data = events[uid]
+        cateogrical_array = data["categorical"]
+        map_categorical_features(
+            expected_inputs=expected_inputs,
+            feature_array=cateogrical_array,
+            categorical_features=categorical_features
+        )
+        events["categorical"] = cateogrical_array
+    return events
+
+def map_categorical_features(expected_inputs, feature_array, categorical_features):
+    feat_window_start = 0
+    feat_window_end = 0
+    new_indices = {}
+    for cat in categorical_features:
+        feat_window_end += len(expected_inputs[cat])
+        indices = np.arange(start=feat_window_start, stop=feat_window_end)
+        feat_window_start = feat_window_end
+        new_indices[cat] = indices
+
+    # get all masks
+    for idx, cat in enumerate(categorical_features):
+        old_values = expected_inputs[cat]
+        new_values = new_indices[cat]
+        masks = []
+        # get masks
+        for value in old_values:
+            m = feature_array[:, idx] == value
+            masks.append(m)
+
+        # apply masks inplace
+        for mask, new_value in zip(masks, new_values):
+            feature_array[:, idx][mask] = new_value
+    return feature_array
+
+def get_batch_statistics_from_sampler(sampler, padding_values=None, features=None):
+    """
+    Calculates the weighted mean and standard deviation over all subphase spaces of a process in *sampler*.
+    The data is expected to be of form : {"unique_identifier_tuple": {continous: arr}, {weight}: arr}.
+    The return value is a dictionary of form {"process": (mean, std)}, where mean and std is a tensor of
+    form length [features].
+    The statistics are evaluated without *padding_values*.
+
+    Args:
+        sampler (dict): Dictionary over datasets
+        padding_values (int, optional): List of padding_values per feature, or single value. Padding value are ignored in the calculation of the statitics. Defaults to None, which means no padding.
+    """
+    logger.info("Calculate mean and std over all subphase spaces")
+    # filter keys after processes
+    weighted_means = []
+    weighted_stds = []
+    features_dict = sampler.get_attribute_of_datasets("continous_input")
+    weights_dict = sampler.get_attribute_of_datasets("relative_weight")
+    sum_of_weights = sum(list(weights_dict.values()))
+
+    # for each uid calculate mean,std and get weight
+    # do weighted mean,std over all uid with weight
+    for current_pid_idx, pid in enumerate(features_dict.keys(), start = 1):
+        # go throught each feature axis and calculate statitic per feature
+        f_means, f_stds = [], []
+        array = features_dict[pid]
+        num_f = array.shape[-1]
+        print(f"calculating stats for {pid} status:{current_pid_idx}/{len(features_dict)}\t\t\r",end=" ", flush=True)
+
+
+        for f_idx in range(num_f):
+
+            # extract feature by index
+            feature_array = array[..., f_idx]
+            # do not include padding into calculation
+            if isinstance(padding_values, (list, tuple)):
+                padding_value = padding_values[f_idx]
+            else:
+                padding_value = padding_values
+
+            padding_mask = (feature_array == padding_value)
+            masked_array = feature_array[~padding_mask]
+
+            masked_mean = masked_array.mean(axis=0)
+            masked_std = masked_array.std(axis=0)
+            # if anything got a nan go into debug mode to investigate
+            if torch.isnan(masked_mean):
+                from IPython import embed; embed(header=f"{pid} is nan check feature_array and sampler")
+
+            f_means.append(masked_mean)
+            f_stds.append(masked_std)
+
+        # weight mean and add to collection
+        pid_weight = weights_dict[pid]
+        weighted_means.append(torch.tensor(f_means) * pid_weight)
+        weighted_stds.append(torch.tensor(f_stds) * pid_weight)
+
+    # calculate weighted average over uid means and std
+    w_avg_mean  = torch.sum(torch.stack(weighted_means, axis=0), axis = 0) / sum_of_weights
+    w_avg_std = torch.sum(torch.stack(weighted_stds, axis=0), axis = 0) / sum_of_weights
+    if features:
+        print("Statistics")
+        for f_name, f_mean, f_std in zip(features, w_avg_mean, w_avg_std):
+            print(f"{f_name:<30}: mean:{f_mean:>10.4} std:{f_std:>10.4}")
+    return w_avg_mean, w_avg_std
+
 
 def get_batch_statistics(events, padding_value=0):
     """
@@ -189,9 +295,9 @@ def split_k_fold_into_training_and_validation(events_dict, c_fold, k_fold, seed,
                 dictionary.pop(uid)
     return train, valid
 
-def create_train_or_validation_sampler(events, target_map, batch_size, min_size=1, train=True):
+def create_train_or_validation_sampler(events, target_map, batch_size, min_size=1, train=True, sample_ratio={"dy": 0.25, "tt": 0.25, "hh": 0.5}):
     # extract data from events and wrap into Datasets
-    DatasetManager = DatasetSampler(None, batch_size=batch_size, min_size=min_size)
+    DatasetManager = DatasetSampler(None, batch_size=batch_size, min_size=min_size, sample_ratio=sample_ratio)
     for uid in list(events.keys()):
         (dataset_type, process_id) = uid
         arrays = events.pop(uid)
@@ -218,13 +324,14 @@ def create_train_or_validation_sampler(events, target_map, batch_size, min_size=
             DatasetManager.calculate_sample_size(dataset_type=ds_type)
     return DatasetManager
 
-def create_train_and_validation_sampler(t_data, v_data, t_batch_size, v_batch_size, target_map={"hh" : 0, "dy": 1, "tt": 2}, min_size=1):
+def create_train_and_validation_sampler(t_data, v_data, t_batch_size, v_batch_size, target_map={"hh" : 0, "dy": 1, "tt": 2}, min_size=1, sample_ratio={"dy": 0.25, "tt": 0.25, "hh": 0.5}):
     train_sampler = create_train_or_validation_sampler(
         t_data,
         target_map = target_map,
         min_size=min_size,
         batch_size=t_batch_size,
-        train=True
+        train=True,
+        sample_ratio=sample_ratio,
     )
     validation_sampler = create_train_or_validation_sampler(
         v_data,
@@ -232,6 +339,7 @@ def create_train_and_validation_sampler(t_data, v_data, t_batch_size, v_batch_si
         min_size=min_size,
         batch_size=v_batch_size,
         train=False,
+        sample_ratio=sample_ratio,
     )
 
     # share relative weight between training and validation sampler

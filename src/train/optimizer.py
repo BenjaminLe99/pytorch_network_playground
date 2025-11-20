@@ -35,6 +35,10 @@ def normalized_weight_decay(
         if len(list(module.named_modules())) == 1:
             for parameter_name, parameter in module.named_parameters():
                 if (isinstance(module, torch.nn.Linear)) and (apply_to in parameter_name):
+                    if "last_linear" in module_name:
+                        no_weight_decay.append(parameter)
+                        continue
+
                     with_weight_decay.append(parameter)
                     print(f"add weight decay to: module:{module}//named: {module_name}// paramter:{parameter_name}")
                 else:

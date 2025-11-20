@@ -5,7 +5,7 @@ import torch
 from models import create_model
 from data.load_data import get_data
 from data.preprocessing import (
-    create_train_and_validation_sampler, get_batch_statistics, split_k_fold_into_training_and_validation, test_sampler
+    create_train_and_validation_sampler, get_batch_statistics, get_batch_statistics_from_sampler, split_k_fold_into_training_and_validation, test_sampler
     )
 from utils.logger import get_logger, TensorboardLogger
 from data.cache import hash_config
@@ -28,6 +28,7 @@ logger.warning(f"Tensorboard logs are stored in {tboard_writer.path}")
 for current_fold in (config["train_folds"]):
     logger.info(f'Start Training of fold {current_fold} from {config["k_fold"] - 1}')
 
+
     ### data preparation
     # Hint: order matters, due to memory constraints views are moved in and out of dictionaries
 
@@ -43,7 +44,7 @@ for current_fold in (config["train_folds"]):
         train_ratio=config["train_ratio"],
     )
     # get weighted mean and std of expected batch composition
-    model_building_config["mean"], model_building_config["std"] = get_batch_statistics(train_data, padding_value=-99999)
+    # model_building_config["mean"], model_building_config["std"] = get_batch_statistics(train_data, padding_value=-99999)
 
     training_sampler, validation_sampler = create_train_and_validation_sampler(
         t_data = train_data,
@@ -51,18 +52,20 @@ for current_fold in (config["train_folds"]):
         t_batch_size = config["t_batch_size"],
         v_batch_size = config["v_batch_size"],
         target_map=target_map,
-        min_size=1
+        min_size=1,
+        sample_ratio=config["sample_ratio"]
+
     )
+    model_building_config["mean"], model_building_config["std"] = get_batch_statistics_from_sampler(training_sampler, padding_values=-99999, features=dataset_config["continous_features"])
 
     ### Model setup
-    model = create_model.BNet(dataset_config["continous_features"], dataset_config["categorical_features"], config=model_building_config)
+    model = create_model.BNetDenseNet(dataset_config["continous_features"], dataset_config["categorical_features"], config=model_building_config)
     model = model.to(DEVICE)
     # TODO: only linear models should contribute to weight decay
     # TODO : SAMW Optimizer
     weight_decay_parameters = optimizer.prepare_weight_decay(model, optimizer_config)
     optimizer_inst = torch.optim.AdamW(list(weight_decay_parameters.values()), lr=optimizer_config["lr"])
     scheduler_inst = torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer_inst, gamma=config["gamma"])
-
 
     # HINT: requires only logits, no softmax at end
     loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
@@ -72,7 +75,7 @@ for current_fold in (config["train_folds"]):
     validation_interval = config["validation_interval"]
     model.train()
 
-    # training loop:
+    ### training loop:
     for iteration in range(max_iteration):
         t_loss, (t_pred, t_targets) = training(
             model = model,
@@ -82,13 +85,12 @@ for current_fold in (config["train_folds"]):
             device=DEVICE
         )
 
-        if (iteration == 4500):
-            from IPython import embed; embed(header="string - 86 in train.py ")
-
-        if (iteration % 1500 == 0) and (iteration > 0):
+        if (iteration % 1000 == 0) and (iteration > 0):
+            previous_lr =  optimizer_inst.param_groups[0]["lr"]
             scheduler_inst.step()
+            logger.info(f"{previous_lr} -> { optimizer_inst.param_groups[0]["lr"]}")
 
-        if (iteration % validation_interval == 0) and (iteration > 0):
+        if (iteration % validation_interval == 0):
             # evaluation of training data
             print("Running evaluation of training data...")
             t_loss, (t_pred, t_tar, t_weights) = validation(model, loss_fn, training_sampler, device=DEVICE)
@@ -112,15 +114,15 @@ for current_fold in (config["train_folds"]):
                 mode = "validation",
                 loss = v_loss.item(),
             )
+            print(f"Evaluation: it: {iteration} - TLoss: {t_loss:.4f} VLoss: {v_loss:.4f}")
 
         # VERBOSITY
         if iteration % LOG_INTERVAL == 0:
             tboard_writer.log_loss({"batch_loss": t_loss.item()}, step=iteration)
             print(f"Training: {iteration} - batch loss: {t_loss.item():.4f}")
-        if (iteration % validation_interval == 0) and (iteration > 0):
-            print(f"Evaluation: it: {iteration} - TLoss: {t_loss:.4f} VLoss: {v_loss:.4f}")
-    # TODO release DATA from previous RUN
 
+    # TODO release DATA from previous RUN
+    from IPython import embed; embed(header="END OF TRAINING try saving - 124 in train.py ")
     # save network
     import export
     cont, cat, tar = training_sampler.sample_batch(device=CPU)

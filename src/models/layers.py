@@ -24,7 +24,7 @@ import torch
 
 
 class WeightNormalizedLinear(torch.nn.Linear):  # noqa: F811
-    def __init__(self,*args, normalize=True ,**kwargs):
+    def __init__(self ,*args, normalize=False, **kwargs):
         """
         If normalize is set to True, Linear layer is replaced by weight normalized layer as described in https://arxiv.org/abs/1602.07868.
         If false, the layer is a normal linear layer.
@@ -40,17 +40,6 @@ class WeightNormalizedLinear(torch.nn.Linear):  # noqa: F811
         if normalize:
             self = torch.nn.utils.parametrizations.weight_norm(self, name='weight', dim=0)
 
-class WeightStandardizationLinear(torch.nn.Linear):
-    def __init__(self, *args, **kwargs):
-        super().__init__(self, *args, **kwargs)
-
-    def forward(self, input):
-        weight = self.weight
-        weight_mean = weight.mean(dim=-1, keepdim=True)
-        std = weight.std(dim=-1 + 1e-5)
-        self.weight = (weight - weight_mean)/ std
-        return super().forward(input)
-
 class PaddingLayer(torch.nn.Module):  # noqa: F811
     def __init__(
         self,
@@ -58,10 +47,11 @@ class PaddingLayer(torch.nn.Module):  # noqa: F811
         mask_value: float | int = EMPTY_FLOAT,
     ):
         """
-        Padding layer for torch models. Pads the input tensor with the given padding value.
+        Pads input tensor on indices which equals *mask_value* with given *padding_value*.
 
         Args:
             padding (int, optional): Padding value. Defaults to 0.
+            mask_value (float, optional): Value where padding should be applied. Defaults to EMMPTY_FLOAT
         """
         super().__init__()
 
@@ -96,7 +86,7 @@ class CategoricalTokenizer(torch.nn.Module):  # noqa: F811
             empty (int, optional): Value used to represent missing values in the input tensor.
                 The empty value must be positive and not already used in the categories.
                 If not given, no handling of missing values will be done.
-                Defaults to 15.
+                Defaults to None.
         """
         super().__init__()
         self._expected_inputs, self._empty = self.setup(categories, expected_categorical_inputs, None)
@@ -122,6 +112,8 @@ class CategoricalTokenizer(torch.nn.Module):  # noqa: F811
         expected_inputs: list[str],
         empty: int,
     ) -> tuple[dict[str, list[int]], int | None]:
+        # do all the preparation steps like value checking and adding of empty categories
+        # also remove double categories and only take the categories used by the network
         def _empty(expected_inputs, empty):
             if empty is None:
                 return None
@@ -154,7 +146,9 @@ class CategoricalTokenizer(torch.nn.Module):  # noqa: F811
                 from IPython import embed
                 embed()
             data = expected_inputs[categorie]
-            # data.append(empty)
+            if empty is not None:
+                # when empty value is given append it to category
+                data.append(empty)
             _expected_inputs[categorie] = data
         return _expected_inputs, empty
 
@@ -223,23 +217,19 @@ class CategoricalTokenizer(torch.nn.Module):  # noqa: F811
     ) -> tuple[torch.FloatTensor, torch.FloatTensor] | None:
         """
         Maps multiple categories given in *array* into a sparse vectoriced lookuptable.
-        Empty values are replaced with *EMPTY*.
+        The given *padding_value* represents no matching categories.
 
         Args:
             array (torch.tensor): 2D array of categories.
-            EMPTY (int, optional): Replacement value if empty. Defaults to columnflow EMPTY_INT.
-            same_empty (bool, optional): If True, all missing values will be mapped to the same value.
-                By default, each category will be mapped to a different value,
-                making it possible to differentia between missing values in different categories.
-                Defaults to False.
 
         Returns:
             tuple([torch.tensor]), None: Returns minimum and LookUpTable
         """
         if array is None:
             return None, None
-        # append empty to the array representing the empty category
-        # array = torch.cat([array, torch.ones(array.shape[0], dtype=torch.int32).reshape(-1, 1) * empty], axis=-1)
+        # append empty to the array representing the empty category if empty is set
+        # if self._empty is not None:
+        #     array = torch.cat([array, torch.ones(array.shape[0], dtype=torch.int32).reshape(-1, 1) * self.empty], axis=-1)
 
         # shift input by minimum, pushing the categories to the valid indice space
         minimum = array.min(axis=-1).values
@@ -415,6 +405,40 @@ class InputLayer(torch.nn.Module):  # noqa: F811
         ).to(torch.float32)
         return x
 
+class DenseNetBlock(torch.nn.Module):
+    def __init__(
+        self,
+        input_nodes,
+        output_nodes,
+        skip_connection_init=1.0,
+        freeze_skip_connection=False,
+        activation_functions = "PReLu",
+        eps=1e-5,
+        normalize=False,
+        *args,
+        **kwargs,
+        ):
+        # TODO Docstring
+        super().__init__(*args, **kwargs)
+        self.input_dim = input_nodes
+        self.output_dim = output_nodes + input_nodes
+        self.dense_block = DenseBlock(
+            input_nodes=input_nodes,
+            output_nodes=output_nodes,
+            activation_functions=activation_functions,
+            normalize=normalize,
+            eps=eps
+        )
+        self.skip_connection_amplifier = torch.nn.Parameter(torch.ones(1) * skip_connection_init)
+        if freeze_skip_connection:
+            self.skip_connection_amplifier.requires_grad = False
+
+    def forward(self, x):
+        _input = x * self.skip_connection_amplifier
+        x = self.dense_block(x)
+        x = torch.concatenate((_input, x), dim = 1)
+        return x
+
 class ResNetBlock(torch.nn.Module):  # noqa: F811
     def __init__(
         self,
@@ -449,7 +473,7 @@ class ResNetBlock(torch.nn.Module):  # noqa: F811
         if freeze_skip_connection:
             self.skip_connection_amplifier.requires_grad = False
 
-        self.linear = WeightNormalizedLinear(self.nodes, self.nodes, bias=False, normalize=normalize)
+        self.linear = WeightNormalizedLinear(self.nodes, self.nodes, bias=True, normalize=normalize)
         self.bn = torch.nn.BatchNorm1d(self.nodes, eps=eps)
         self.act_fn = self.act_func
 
@@ -487,11 +511,11 @@ class DenseBlock(torch.nn.Module):  # noqa: F811
                 Defaults to "LeakyReLu".
         """
         super().__init__()
-        self.input_nodes = input_nodes
-        self.output_nodes = output_nodes
+        self.input_dim = input_nodes
+        self.output_dim = output_nodes
 
-        self.linear = WeightNormalizedLinear(self.input_nodes, self.output_nodes, bias=False, normalize=normalize)
-        self.bn = torch.nn.BatchNorm1d(self.output_nodes, eps=eps)
+        self.linear = WeightNormalizedLinear(self.input_dim, self.output_dim, bias=True, normalize=normalize)
+        self.bn = torch.nn.BatchNorm1d(self.output_dim, eps=eps)
         self.act_fn = self._get_attr(torch.nn.modules.activation, activation_functions)()
 
     def _get_attr(self, obj, attr):
@@ -542,10 +566,10 @@ class ResNetPreactivationBlock(torch.nn.Module):  # noqa: F811
         if freeze_skip_connection:
             self.skip_connection_amplifier.requires_grad = False
 
-        self.linear_1 = WeightNormalizedLinear(self.nodes, self.nodes, bias=False, normalize=normalize)
+        self.linear_1 = WeightNormalizedLinear(self.nodes, self.nodes, bias=True, normalize=normalize)
         self.bn_1 = torch.nn.BatchNorm1d(self.nodes, eps=eps)
         self.act_fn_1 = self.act_func
-        self.linear_2 = WeightNormalizedLinear(self.nodes, self.nodes, bias=False, normalize=normalize)
+        self.linear_2 = WeightNormalizedLinear(self.nodes, self.nodes, bias=True, normalize=normalize)
         self.bn_2 = torch.nn.BatchNorm1d(self.nodes, eps=eps)
         self.act_fn2 = self.act_func
 
