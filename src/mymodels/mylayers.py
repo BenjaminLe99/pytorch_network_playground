@@ -42,4 +42,4 @@ class DenseNetwork(torch.nn.Module):
 
         # Output sees all hidden layers concatenated
         final_input = torch.cat(layers, dim=1)
-        return self.output_layer(final_input)  # raw logits (no activation)
+        return self.last_linear(final_input)  # raw logits (no activation) 
