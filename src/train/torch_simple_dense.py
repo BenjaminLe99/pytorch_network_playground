@@ -65,7 +65,7 @@ for current_fold in (config["train_folds"]):
 
     ### Model setup
     model = recreate_simple.init_layers(dataset_config["continous_features"], dataset_config["categorical_features"], config=model_building_config)
-    #from IPython import embed;embed(header=" string - 63 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/testdnn2.py")
+    from IPython import embed;embed(header=" string - 63 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/testdnn2.py")
     #save_marcels_weights(model)
     
     model = model.to(DEVICE)
@@ -135,14 +135,15 @@ for current_fold in (config["train_folds"]):
             if v_loss < best_v_loss:
                 best_v_loss = v_loss
                 best_iteration = validation_iteration
+                lr_drop_flag = False
                 torch.save(model.state_dict(), "/afs/desy.de/user/l/lebenjam/Master/neuralnetwork/mlmodels/model_dicts/best_model.pth")
-            
+
             else:
                 # check patience since last improvement
                 if validation_iteration - best_iteration >= patience and validation_iteration - last_lr_drop >= patience:
                     scheduler_inst.step()
                     last_lr_drop = validation_iteration
-                    print("loss didnt improve for 10 iterations, reducing learning rate")
+                    lr_drop_flag = True
                 
                 # Early stop if no improvement for 20 epochs
                 if validation_iteration - best_iteration >= early_stopping_patience:
@@ -154,7 +155,16 @@ for current_fold in (config["train_folds"]):
             tboard_writer.log_loss({"batch_loss": t_loss.item()}, step=iteration)
             print(f"Training: {iteration} - batch loss: {t_loss.item():.4f}")
         if (iteration % validation_interval == 0) and (iteration > 0):
+            print("==========================================================================")
+            if lr_drop_flag == True:
+                print("loss didnt improve for 10 iterations, reducing learning rate")
             print(f"Evaluation: it: {iteration} - TLoss: {t_loss:.4f} VLoss: {v_loss:.4f}")
+            print(f"current best validation loss: {best_v_loss:.4f}")
+            if lr_drop_flag == False:
+                print(f"validation iterations before next learning rate update: {patience - (validation_iteration - best_iteration)}")
+            else:
+                print(f"validation iterations before early stopping: {early_stopping_patience - (validation_iteration - best_iteration)}")
+            print("==========================================================================")
 
     # load best validation run parameters
     model.load_state_dict(torch.load("/afs/desy.de/user/l/lebenjam/Master/neuralnetwork/mlmodels/model_dicts/best_model.pth"))
@@ -164,6 +174,7 @@ for current_fold in (config["train_folds"]):
 
     # TODO release DATA from previous RUN
     from IPython import embed;embed(header=" string - 165 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/testdnn2.py")
+    
     # save network
     import ml_save
     cont, cat, tar = training_sampler.sample_batch(device=CPU)

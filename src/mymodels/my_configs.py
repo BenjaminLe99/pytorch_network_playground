@@ -40,11 +40,11 @@ config = {
     "v_batch_size" : 4096 * 8,
     "t_batch_size" : 4096,
     "sample_ratio" : {"dy": 0.33, "tt": 0.33, "hh": 0.33},
-    "modelname": "simple_dense_fixed_standardization_test1",
+    "modelname": "simple_dense_fixed_standardization_test2",
     "max_iteration": 100000000,
     "validation_interval": 500,
-    "early_stopping_patience": 20,
-    "patience": 10,
+    "early_stopping_patience": 10,
+    "patience": 5,
 
 }
 
