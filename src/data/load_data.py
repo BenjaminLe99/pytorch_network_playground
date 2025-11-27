@@ -13,24 +13,25 @@ from data.cache import DataCacher
 
 logger = get_logger(__name__)
 
-
-def find_datasets(dataset_patterns: str, year_patterns: str, file_type: str="root"):
+def find_datasets(dataset_patterns: list[str], year_patterns: list[str], file_type: str="root", verbose=True):
     """
-    Find all files in ${INPUT_DATA_DIR} by pattern defined by <year_pattern>/<dataset_pattern>/*.file_type and
+    Find all files in ${INPUT_DATA_DIR} by glob pattern defined by <year_pattern>/<dataset_pattern>/*.file_type and
     return the result as a dictionary with dataset names as keys and list of file paths as values.
+    Duplicates in *year_pattern* and *dataset_patterns* DO NOT change result.
 
     Args:
-        dataset_patter (str): _description_
-        year_pattern (str): Pattern describing the years
+        dataset_patterns (list[str]): Pattern describing our nano AODs, ex: ['hh_ggf_hbb_htt_kl*_kt1*']
+        year_pattern (str): Pattern describing the years.
         file_type (str, optional): File extension . Defaults to "root".
 
     Returns:
         dict: dictionary with dataset names as keys and list of file paths as values
     """
+    # get data dir from config
     if (data_dir := os.environ.get("INPUT_DATA_DIR", None)) is None:
         raise ValueError("Environment variable INPUT_DATA_DIR not set! Source setup.sh")
 
-    # wrapp patterns in lists if only being a single string
+    # wrapp patterns since iterable is assumed
     if isinstance(dataset_patterns, str):
         dataset_patterns = [dataset_patterns]
     if isinstance(year_patterns, str):
@@ -38,9 +39,11 @@ def find_datasets(dataset_patterns: str, year_patterns: str, file_type: str="roo
 
     file_pattern = f"*.{file_type}"
 
+    # resolve year pattern and remove duplicates
     years = []
     for year_pattern in year_patterns:
         years += [year.name for year in pathlib.Path(data_dir).glob(f"{year_pattern}")]
+    years = sorted(set(years))
 
     data = {}
     for year in years:
@@ -55,8 +58,10 @@ def find_datasets(dataset_patterns: str, year_patterns: str, file_type: str="roo
                 files = list(map(str, pathlib.Path(dataset).glob(file_pattern)))
                 if len(files) == 0:
                     raise ValueError(f"{dataset.name} has 0 files")
-                size = round(sum(os.path.getsize(f) for f in files) / (1024**2),2)
-                logger.info(f"+{len(files)} files | size {size} MB | {year}/{dataset.name}")
+
+                if verbose:
+                    size = round(sum(os.path.getsize(f) for f in files) / (1024**2),2)
+                    logger.info(f"+{len(files)} files | size {size} MB | {year}/{dataset.name}")
                 data[year][dataset.name] = files
     if not data:
         raise ValueError("No datasets found with given patterns")
@@ -87,13 +92,16 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
     if depthCount(branches) > 1 and branches is not None:
         raise ValueError("branches must be a flat list")
 
-    # include meta fields that are necessary for every training
-    # process_id is for filtering after subprocesses
-    # normalizaton_weight is for
-    meta_fields = {"process_id", "normalization_weight", "tau2_isolated", "leptons_os", "channel_id"}
+    # include meta fields that are necessary for preprocessing and baseline cuts
+    # fields -> purpose:
+    #   process_id -> filtering of subphasespaces
+    #   normalization_weight -> used as sample weight for batch
+    #   tau2_isolated, lepton_os, channel_id -> used for baseline cut
+    #   event -> event number used for k-fold splitting
+    meta_fields = {"process_id", "normalization_weight", "tau2_isolated", "leptons_os", "channel_id", "event"}
     branches = set(branches).union(meta_fields)
 
-    # handle cuts
+    # handle baseline combine with additional cuts
     baseline_cuts = [
         "(tau2_isolated == 1)",
         "(leptons_os == 1)",
@@ -106,12 +114,12 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
         cut = []
     cuts = baseline_cuts + cut
 
-
+    # load root files and combine the array to continogus arrays
     if isinstance(files_path, str):
         files_path = [files_path]
     arrays = []
-    logger.info(f"loading: {pathlib.Path(files_path[0]).parent}")
     for file_path in files_path:
+        logger.info(f"loading: {file_path}")
         with uproot.open(file_path, object_cache=None, array_cache=None) as file:
             tree = file["events"]
             arrays.append(tree.arrays(branches, library="ak", cut="&".join(cuts)).to_numpy())
@@ -138,7 +146,7 @@ def parquet_to_awkward(files_path: Union[list[str],str], columns: Union[list[str
 
 def get_loader(file_type: str, **kwargs):
     """
-    Small helper function to get the correct loader function and its configuration based on the file type.
+    Small helper function to load correct loader function and its configuration based on given *file_type*.
 
     Args:
         file_type (str): file extension.
@@ -283,9 +291,13 @@ def convert_numpy_to_torch(events, continous_features, categorical_features, dty
             ]
         # convert to torch
         weight = torch.tensor(np.sum(arr["normalization_weight"]), dtype = dtype)
+        # event id
+        event_id = torch.tensor(np.ascontiguousarray(arr["event"]), dtype=torch.uint64)
+
         events[uid] = {
             "continous": continous_tensor,
             "categorical": categorical_tensor,
-            "weight": weight
+            "weight": weight,
+            "event_id" : event_id,
         }
     return events

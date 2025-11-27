@@ -61,7 +61,8 @@ class BNet(torch.nn.Module):
 
     def init_layers(self, continous_features, categorical_features, config):
         # increasing eps helps to stabilize training to counter batch norm and L2 reg counterplay when used together.
-        eps = 0.5e-5
+        # eps = 0.5e-5
+        eps = 0.001
         # activate weight normalization on linear layer weights
         normalize = False
 
@@ -112,13 +113,19 @@ class BNetDenseNet(torch.nn.Module):
 
     def init_layers(self, continous_features, categorical_features, config):
         # increasing eps helps to stabilize training to counter batch norm and L2 reg counterplay when used together.
-        eps = 0.5e-5
+        eps = 0.001
         # activate weight normalization on linear layer weights
         normalize = False
 
         # helper where all layers are defined
         # std layers are filled when statitics are known
-        self.std_layer = StandardizeLayer(mean=config["mean"], std=config["std"])
+        if config["mean"] is None and config["std"] is None:
+            self.std_layer = StandardizeLayer(
+                mean = torch.zeros(len(continous_features)),
+                std = torch.ones(len(continous_features))
+            )
+        else:
+            self.std_layer = StandardizeLayer(mean=config["mean"], std=config["std"])
 
         self.continuous_padding = PaddingLayer(padding_value=-4, mask_value=EMPTY_FLOAT)
 
@@ -149,7 +156,7 @@ class BNetDenseNet(torch.nn.Module):
             "skip_connection_init":config["skip_connection_init"],
             "freeze_skip_connection":config["freeze_skip_connection"],
             "activation_functions":"ELU",
-            "eps":1e-5,
+            "eps":eps,
             "normalize":False,
         }
 
@@ -170,4 +177,22 @@ class BNetDenseNet(torch.nn.Module):
         x = self.dense_block_4(x)
         x = self.dense_block_5(x)
         x = self.last_linear(x)
+        return x
+
+class AddActFnToModel(torch.nn.Module):
+    def __init__(self, model, act_fn, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.model = model
+        self.act_func = self._get_attr(torch.nn.modules.activation, act_fn)(dim=1)
+
+    def _get_attr(self, obj, attr):
+        for o in dir(obj):
+            if o.lower() == attr.lower():
+                return getattr(obj, o)
+        else:
+            raise AttributeError(f"Object has no attribute '{attr}'")
+
+    def forward(self, categorical_inputs, continuous_inputs):
+        x = self.model(categorical_inputs, continuous_inputs)
+        x = self.act_func(x)
         return x

@@ -396,6 +396,7 @@ class InputLayer(torch.nn.Module):  # noqa: F811
         return x
 
     def forward(self, categorical_inputs, continuous_inputs):
+        # HINT: When comparing this layer with other compare order of inputs
         x = torch.cat(
             [
                 self.continous_preprocessing_pipeline(continuous_inputs),
@@ -436,7 +437,7 @@ class DenseNetBlock(torch.nn.Module):
     def forward(self, x):
         _input = x * self.skip_connection_amplifier
         x = self.dense_block(x)
-        x = torch.concatenate((_input, x), dim = 1)
+        x = torch.concatenate((x, _input), dim = 1)
         return x
 
 class ResNetBlock(torch.nn.Module):  # noqa: F811

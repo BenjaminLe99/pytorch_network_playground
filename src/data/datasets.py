@@ -292,3 +292,10 @@ class DatasetSampler(t_data.Sampler):
 
     def get_dataset_batch_generators(self, **kwargs):
         return {uid: dataset.batch_generator(**kwargs) for uid, dataset in self.flat_datasets().items()}
+
+    def share_weights_between_sampler(self, dst_sampler):
+        # helper to enable ex. validation sampler to get sampling weight from training sampler
+        for dataset_type, datasets in self.dataset_inst.items():
+            for uid, ds in datasets.items():
+                v_ds = dst_sampler.dataset_inst[dataset_type][uid]
+                v_ds.relative_weight = ds.relative_weight
