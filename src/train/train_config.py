@@ -3,7 +3,7 @@ from data.load_data import find_datasets
 
 ### data config
 # targets and inputs
-target_map = {"hh" : 0, "dy": 1, "tt": 2}
+target_map = {"hh" : 0, "tt": 1, "dy": 2}
 continous_features, categorical_features = input_features(debug=False, debug_length=3)
 dataset_pattern = ["dy_*","tt_*", "hh_ggf_hbb_htt_kl0_kt1*","hh_ggf_hbb_htt_kl1_kt1*"]
 eras = ["22pre", "22post", "23pre", "23post"]
@@ -22,14 +22,20 @@ model_building_config = {
     "ref_phi_columns": ("res_dnn_pnet_vis_tau1", "res_dnn_pnet_vis_tau2"),
     "rotate_columns": ("res_dnn_pnet_bjet1", "res_dnn_pnet_bjet2", "res_dnn_pnet_fatjet", "res_dnn_pnet_vis_tau1", "res_dnn_pnet_vis_tau2"),
     "categorical_padding_value": None,
+    "continous_padding_value": None,
     "nodes": 128,
     "activation_functions": "elu",
     "skip_connection_init": 1,
     "freeze_skip_connection": True,
+    "batch_norm_eps" : 0.001, # marcel : 0.001
+
 }
 
 config = {
-    "gamma":0.95,
+    "max_train_iteration" : 60000,
+    "verbose_interval" : 25,
+    "validation_interval" : 400,
+    "gamma":0.5,
     "label_smoothing":0,
     "train_folds" : (0,),
     "k_fold" : 5,
@@ -39,6 +45,20 @@ config = {
     "t_batch_size" : 4096,
     "sample_ratio" : {"dy": 1/3, "tt": 1/3, "hh": 1/3},
     "min_events_in_batch": 1,
+
+    "save_model_name" : "model_nr4",
+    "early_stopping_patience" : 10, # marcel : 10
+    "early_stopping_min_delta" : 0, # marcel : 0
+    "get_batch_statistic_return_dummy" : False,
+    "load_marcel_stats" : False,
+    "load_marcel_weights" : False,
+}
+
+scheduler_config = {
+    "patience" : 4, # marcel : 10
+    "min_delta" : 0.01, # marcel : 0
+    "threshold_mode" : "abs", # marcel : abs
+    "factor" : 0.5,
 }
 
 optimizer_config = {
@@ -46,4 +66,5 @@ optimizer_config = {
     "decay_factor": 500,
     "normalize": True,
     "lr":1e-3,
+    # "lr":1e-6,
 }

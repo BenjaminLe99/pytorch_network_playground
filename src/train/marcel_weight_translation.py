@@ -49,8 +49,8 @@ def modify_state_dict_with_marcels_weights(state_dict):
     }
 
     # load marcels weights from pickle
-
-    with open(os.path.expanduser("/afs/desy.de/user/r/riegerma/public/weights.pkl"), "rb") as f:
+    # /afs/desy.de/user/r/riegerma/public/weights2.pkl
+    with open(os.path.expanduser("/afs/desy.de/user/r/riegerma/public/weights2.pkl"), "rb") as f:
         marcel_weights: dict[str, np.ndarray] = cloudpickle.load(f)
 
     # copy external dict to prevent inplace changes
@@ -144,9 +144,18 @@ def replace_standardization_layer_state_dict(state_dict, continous_features):
     state_dict["input_layer.std_layer.std"] = f_std
     return state_dict
 
-def load_marcels_weights(model, continous_features):
+def load_marcels_weights(model, continous_features, with_std=True, with_weights=True):
+    if with_std == False or with_weights == False:
+        print("return unmodified model")
+        return model
+
     m_state = model.state_dict()
-    m_state = modify_state_dict_with_marcels_weights(m_state)
-    m_state = replace_standardization_layer_state_dict(m_state, continous_features)
+    if with_weights:
+        print("loading weights from marcel")
+        m_state = modify_state_dict_with_marcels_weights(m_state)
+    if with_std:
+        print("loading std stats from marcel")
+        m_state = replace_standardization_layer_state_dict(m_state, continous_features)
+
     model.load_state_dict(m_state)
     return model

@@ -62,7 +62,7 @@ class BNet(torch.nn.Module):
     def init_layers(self, continous_features, categorical_features, config):
         # increasing eps helps to stabilize training to counter batch norm and L2 reg counterplay when used together.
         # eps = 0.5e-5
-        eps = 0.001
+
         # activate weight normalization on linear layer weights
         normalize = False
 
@@ -90,10 +90,10 @@ class BNet(torch.nn.Module):
             padding_continous_layer=self.continuous_padding,
         )
 
-        self.transition_dense_1 = DenseBlock(input_nodes = self.input_layer.ndim, output_nodes = config["nodes"], activation_functions=config["activation_functions"], eps=eps, normalize=normalize) # noqa
-        self.resnet_block_1 = ResNetPreactivationBlock(config["nodes"], config["activation_functions"], config["skip_connection_init"], config["freeze_skip_connection"], eps=eps, normalize=normalize)
-        self.resnet_block_2 = ResNetPreactivationBlock(config["nodes"], config["activation_functions"], config["skip_connection_init"], config["freeze_skip_connection"], eps=eps, normalize=normalize)
-        self.resnet_block_3 = ResNetPreactivationBlock(config["nodes"], config["activation_functions"], config["skip_connection_init"], config["freeze_skip_connection"], eps=eps, normalize=normalize)
+        self.transition_dense_1 = DenseBlock(input_nodes = self.input_layer.ndim, output_nodes = config["nodes"], activation_functions=config["activation_functions"], eps=config["batch_norm_eps"], normalize=normalize) # noqa
+        self.resnet_block_1 = ResNetPreactivationBlock(config["nodes"], config["activation_functions"], config["skip_connection_init"], config["freeze_skip_connection"], eps=config["batch_norm_eps"], normalize=normalize)
+        self.resnet_block_2 = ResNetPreactivationBlock(config["nodes"], config["activation_functions"], config["skip_connection_init"], config["freeze_skip_connection"], eps=config["batch_norm_eps"], normalize=normalize)
+        self.resnet_block_3 = ResNetPreactivationBlock(config["nodes"], config["activation_functions"], config["skip_connection_init"], config["freeze_skip_connection"], eps=config["batch_norm_eps"], normalize=normalize)
         self.last_linear = torch.nn.Linear(config["nodes"], 3)
 
     def forward(self, categorical_inputs, continuous_inputs):
@@ -110,6 +110,8 @@ class BNetDenseNet(torch.nn.Module):
     def __init__(self, continous_features, categorical_features, config, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.init_layers(config=config, continous_features=continous_features, categorical_features=categorical_features)
+        self.categorical_features = categorical_features
+        self.continous_features = continous_features
 
     def init_layers(self, continous_features, categorical_features, config):
         # increasing eps helps to stabilize training to counter batch norm and L2 reg counterplay when used together.
@@ -127,7 +129,12 @@ class BNetDenseNet(torch.nn.Module):
         else:
             self.std_layer = StandardizeLayer(mean=config["mean"], std=config["std"])
 
-        self.continuous_padding = PaddingLayer(padding_value=-4, mask_value=EMPTY_FLOAT)
+
+        if config["continous_padding_value"] is None:
+            self.continuous_padding = None
+        else:
+            self.continuous_padding = PaddingLayer(padding_value=-4, mask_value=EMPTY_FLOAT)
+
 
         if config["categorical_padding_value"] is None:
             self.categorical_padding = None
@@ -148,6 +155,8 @@ class BNetDenseNet(torch.nn.Module):
             std_layer=self.std_layer,
             # rotation_layer=rotation_layer,
             rotation_layer=None,
+            # padding_categorical_layer=self.categorical_padding,
+            # padding_continous_layer=self.continuous_padding,
             padding_categorical_layer=self.categorical_padding,
             padding_continous_layer=self.continuous_padding,
         )
@@ -183,6 +192,9 @@ class AddActFnToModel(torch.nn.Module):
     def __init__(self, model, act_fn, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.model = model
+        self.categorical_features = model.categorical_features
+        self.continous_features = model.continous_features
+
         self.act_func = self._get_attr(torch.nn.modules.activation, act_fn)(dim=1)
 
     def _get_attr(self, obj, attr):

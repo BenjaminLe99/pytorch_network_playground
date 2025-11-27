@@ -37,7 +37,8 @@ class ColoredFormatter(logging.Formatter):
 
 class TensorboardLogger():
     def __init__(self, name=None):
-        self.path = Path(self.log_dir) / name.stem
+        self.hash = name.stem
+        self.path = self.logger_path()
         self.writer = self.create_tensorboard_writer(log_dir=self.path)
 
     def log_scalar(self, tag, value, step):
@@ -67,16 +68,21 @@ class TensorboardLogger():
     def log_figure(self, tag, figure, step):
         self.writer.add_figure(tag, figure, step)
 
-
     @property
     def log_dir(self):
-        return os.environ["TENSORBOARD_DIR"]
+        return Path(os.environ["TENSORBOARD_DIR"])
+
+    def logger_path(self):
+        from time import localtime, strftime
+        t = strftime("%Y_%m_%d-%H_%M_%S", localtime())
+        new_stem = f"{t}-{self.hash}"
+        logger_path = self.log_dir / new_stem
+        return logger_path
 
     def create_tensorboard_writer(self, config=None, log_dir=None):
         # TODO: THINK about location of writer? Should it be inside the hashed dir?
         # from data.cache import DataCacher
         from torch.utils.tensorboard import SummaryWriter
-
         # if config is not None:
         #     cacher = DataCacher(config)
         #     if log_dir is None:

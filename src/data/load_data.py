@@ -55,7 +55,7 @@ def find_datasets(dataset_patterns: list[str], year_patterns: list[str], file_ty
                 raise ValueError(f"dataset pattern {dataset_patter} for {year} resulted in 0 datasets")
 
             for dataset in datasets:
-                files = list(map(str, pathlib.Path(dataset).glob(file_pattern)))
+                files = sorted(map(str, pathlib.Path(dataset).glob(file_pattern)))
                 if len(files) == 0:
                     raise ValueError(f"{dataset.name} has 0 files")
 
@@ -292,7 +292,7 @@ def convert_numpy_to_torch(events, continous_features, categorical_features, dty
         # convert to torch
         weight = torch.tensor(np.sum(arr["normalization_weight"]), dtype = dtype)
         # event id
-        event_id = torch.tensor(np.ascontiguousarray(arr["event"]), dtype=torch.uint64)
+        event_id = torch.tensor(np.ascontiguousarray(arr["event"]), dtype=torch.int64)
 
         events[uid] = {
             "continous": continous_tensor,

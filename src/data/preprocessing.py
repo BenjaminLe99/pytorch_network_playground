@@ -46,18 +46,30 @@ def map_categorical_features(expected_inputs, feature_array, categorical_feature
             feature_array[:, idx][mask] = new_value
     return feature_array
 
-def get_batch_statistics_from_sampler(sampler, padding_values=None, features=None):
+def get_batch_statistics_from_sampler(sampler, padding_values=None, features=None, return_dummy=False):
     """
     Calculates the weighted mean and standard deviation over all subphase spaces of a process in *sampler*.
     The data is expected to be of form : {"unique_identifier_tuple": {continous: arr}, {weight}: arr}.
     The return value is a dictionary of form {"process": (mean, std)}, where mean and std is a tensor of
     form length [features].
     The statistics are evaluated without *padding_values*.
+    If values are used only for init of Standardization Layer turn on *return_dummy*, which return a mean and std tensor, corresponding to 0 and 1.
 
     Args:
         sampler (dict): Dictionary over datasets
         padding_values (int, optional): List of padding_values per feature, or single value. Padding value are ignored in the calculation of the statitics. Defaults to None, which means no padding.
+        return_dummy (bool): Return dummy values that describe Identity transformation. This does not compute the statistics, and are a good option when one load pretrained weights anyway.
     """
+    # when only dummy values for init are necessary return mean = 0 and std as 1
+    if return_dummy:
+        features_dict = sampler.get_attribute_of_datasets("continous_input")
+        feature_shape = features_dict[list(features_dict.keys())[0]].shape[-1]
+        mean = torch.zeros(feature_shape)
+        std = torch.ones(feature_shape)
+        logger.info("\nreturning dummy normalization statistics")
+        return mean, std
+
+
     logger.info("Calculate mean and std over all subphase spaces")
     # filter keys after processes
     weighted_means = []
@@ -73,7 +85,7 @@ def get_batch_statistics_from_sampler(sampler, padding_values=None, features=Non
         f_means, f_vars = [], []
         array = features_dict[pid]
         num_f = array.shape[-1]
-        print(f"calculating stats for {pid} status:{current_pid_idx}/{len(features_dict)}\t\t\r",end=" ", flush=True)
+        print(f"calculating stats for {pid} status:{current_pid_idx}/{len(features_dict)}\t\t\t\r",end=" ", flush=True)
 
 
         for f_idx in range(num_f):
@@ -107,9 +119,9 @@ def get_batch_statistics_from_sampler(sampler, padding_values=None, features=Non
     w_avg_mean  = torch.sum(torch.stack(weighted_means, axis=0), axis = 0) / sum_of_weights
     w_avg_var = torch.sum(torch.stack(weighted_vars, axis=0), axis = 0) / sum_of_weights
     if features:
-        print("Statistics")
+        logger.info("\nStatistics")
         for f_name, f_mean, f_var in zip(features, w_avg_mean, w_avg_var):
-            print(f"{f_name:<30}: mean:{f_mean:>10.4} var:{f_var:>10.4}")
+            logger.info(f"{f_name:<30}: mean:{f_mean:>10.4} var:{f_var:>10.4}")
     return w_avg_mean, w_avg_var.sqrt()
 
 
@@ -226,7 +238,6 @@ def k_fold_indices(event_id, c_fold, k_fold, seed, test=False):
     # if no kfold is wished than set test to 0 and return everyrthing
     if k_fold == 0:
         raise ValueError(f"Can't do k-fold with desired k_fold of {k_fold}, needs to be > 0")
-
     test_fold_mask = event_id % k_fold == c_fold
     indices = torch.arange(len(event_id))
 

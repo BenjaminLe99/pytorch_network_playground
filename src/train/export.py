@@ -1,4 +1,8 @@
 import torch
+import os
+from pathlib import Path
+from models.create_model import AddActFnToModel
+
 
 def torch_export(model, dst_path, input_tensors):
     from pathlib import Path
@@ -36,9 +40,45 @@ def torch_export(model, dst_path, input_tensors):
     p = Path(f"{dst_path}").with_suffix(".pt2")
     torch.export.save(exp, p, pickle_protocol=4)
 
+def torch_export_v2(model, name, fold):
+    model = AddActFnToModel(model, "softmax")
+    model = model.eval()
+
+    # create dummy features from shape
+    # batch size 1 is an edge case and overwrites dynamic batch size, thus, inflate input to prevent this
+    num_cat = len(model.categorical_features)
+    num_cont = len(model.continous_features)
+
+    categorical_input = torch.zeros(2, num_cat).to(torch.int32)
+    continuous_inputs = torch.zeros(2, num_cont).to(torch.float32)
 
 
-def run_exported_tensor_model(pt2_path, input_tensors):
+    # HINT: input is chosen since model takes a tuple of inputs, normally name of inputs is used
+    # dim = torch.export.dynamic_shapes.Dim.AUTO
+    dim = torch.export.Dim("batch")
+
+    dynamic_shapes = {
+        "categorical_inputs": {0:dim, 1:categorical_input.shape[-1]},
+        "continuous_inputs" : {0:dim, 1:continuous_inputs.shape[-1]},
+    }
+
+    exp = torch.export.export(
+        model,
+        args=(categorical_input, continuous_inputs),
+        dynamic_shapes=dynamic_shapes,
+    )
+
+    base_dir = os.environ["MODELS_DIR"]
+    dst = (Path(base_dir) / f"{name}_fold{fold}").with_suffix(".pt2")
+    torch.export.save(exp, dst, pickle_protocol=4)
+
+def torch_save(model, name, fold):
+    base_dir = os.environ["MODELS_DIR"]
+    dst = (Path(base_dir) / f"{name}_fold{fold}").with_suffix(".pt")
+    torch.save(model, dst)
+
+
+def run_exported_tensor_model(pt2_path, cat, cont):
     exp = torch.export.load(pt2_path)
-    scores = exp.module()(input_tensors)
+    scores = exp.module()(cat, cont)
     return scores

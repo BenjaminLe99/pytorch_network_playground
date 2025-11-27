@@ -1,0 +1,57 @@
+class EarlyStopSignal:
+    """
+    EarlyStopper signal giver counts how often
+    """
+
+    def __init__(self, patience=1, min_delta=0, relative_delta=False, num_models=1):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.min_validation_loss = float('inf')
+        self.relative_delta = relative_delta
+        self.best_models = []
+
+
+    def early_stop_signal(self, validation_loss):
+        if self.relative_delta:
+            current_delta = self.min_validation_loss * self.min_delta
+        else:
+            current_delta = self.min_delta
+
+        if validation_loss < self.min_validation_loss:
+            self.min_validation_loss = validation_loss
+            self.counter = 0
+        elif validation_loss >= (self.min_validation_loss + current_delta):
+            self.counter += 1
+            if self.counter >= self.patience:
+                return True
+        return False
+
+
+    def reset(self):
+        self.counter = 0
+
+    def __call__(self, loss):
+        return self.early_stop_signal(loss)
+
+
+class EarlyStopOnPlateau:
+
+    def __init__(self):
+        self.previous_validation_loss = 100_000
+        self.best_model = None
+        self.steps_ago = 0
+        self.current_step = 0
+
+    def check(self, loss, model):
+        # when loss is small, save model
+        if self.previous_validation_loss >= loss:
+            self.previous_validation_loss = loss
+            self.best_model = model.state_dict().copy()
+            self.steps_ago = 0
+            print("early stop criteria triggered")
+            return True
+        return False
+
+    def __call__(self, loss, model):
+        return self.check(loss, model)
