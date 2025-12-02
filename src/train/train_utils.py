@@ -1,13 +1,20 @@
 import torch
 import plotting
 import metrics
+import train_config
 
+functions = {}
 
-def training(model, loss_fn, optimizer, sampler, device):
+def register(fn):
+    # helper to register functions in pool of functions
+    functions[fn.__name__] = fn
+    return fn
+
+@register
+def training_default(model, loss_fn, optimizer, sampler, device):
     optimizer.zero_grad()
 
     cont, cat, targets = sampler.sample_batch(device=device)
-    targets = targets.to(torch.float32)
 
     #pred = model((cat,cont))
     pred = model(categorical_inputs=cat, continuous_inputs=cont)
@@ -17,7 +24,30 @@ def training(model, loss_fn, optimizer, sampler, device):
     optimizer.step()
     return loss, (pred, targets)
 
-def validation(model, loss_fn, sampler, device):
+@register
+def training_sam(model, loss_fn, optimizer, sampler, device):
+    optimizer.zero_grad()
+
+    cont, cat, targets = sampler.sample_batch(device=device)
+    pred = model(categorical_inputs=cat, continuous_inputs=cont)
+
+    loss = loss_fn(pred, targets)
+    loss.backward()
+    optimizer.first_step(zero_grad=True)
+
+    # second forward step with disabled bachnorm running stats in second forward step
+    optimizer.disable_running_stats(model)
+    pred_2 = model(categorical_inputs=cat, continuous_inputs=cont)
+    loss_fn(pred_2, targets).backward()
+
+
+    optimizer.second_step(zero_grad=True)
+
+    optimizer.enable_running_stats(model)  # <- this is the important line
+    return loss, (pred, targets)
+
+@register
+def validation_default(model, loss_fn, sampler, device):
     with torch.no_grad():
         # run validation every x steps
         val_loss = []
@@ -31,7 +61,8 @@ def validation(model, loss_fn, sampler, device):
             for cont, cat, tar in validation_batch_generator:
                 cat, cont, tar = cat, cont, tar
                 val_pred = model(categorical_inputs=cat, continuous_inputs=cont)
-
+                # if torch.any(torch.isnan(val_pred)):
+                #     from IPython import embed; embed(header="string - 63 in train_utils.py ")
                 loss = loss_fn(val_pred, tar.reshape(-1, 3))
 
                 dataset_losses.append(loss)
@@ -100,3 +131,6 @@ def log_metrics(tensorboard_inst, iteration_step, sampler_output, target_map, mo
 
     tensorboard_inst.log_precision(_metrics, step=iteration_step, mode=mode)
     tensorboard_inst.log_sensitivity(_metrics, step=iteration_step, mode=mode)
+
+training_fn = functions.get(f"training_{train_config.config["training_fn"]}")
+validation_fn = functions.get(f"validation_{train_config.config["validation_fn"]}")

@@ -16,9 +16,9 @@ class Dataset(t_data.Dataset):
         dataset_type: str=None,
         randomize: bool =True
     ):
-        self.continous_input = continous_tensor
-        self.categorical_input = categorical_tensor
-        self.targets = target
+        self.continous_input = continous_tensor.to(torch.float32)
+        self.categorical_input = categorical_tensor.to(torch.int32)
+        self.targets = target.to(torch.float32)
         self.weight = weight
         self.name = name
         self.randomize = randomize

@@ -41,16 +41,17 @@ def torch_export(model, dst_path, input_tensors):
     torch.export.save(exp, p, pickle_protocol=4)
 
 def torch_export_v2(model, name, fold):
+    DEVICE=torch.device("cpu")
     model = AddActFnToModel(model, "softmax")
+    model = model.to(DEVICE)
     model = model.eval()
-
     # create dummy features from shape
     # batch size 1 is an edge case and overwrites dynamic batch size, thus, inflate input to prevent this
     num_cat = len(model.categorical_features)
     num_cont = len(model.continous_features)
 
-    categorical_input = torch.zeros(2, num_cat).to(torch.int32)
-    continuous_inputs = torch.zeros(2, num_cont).to(torch.float32)
+    categorical_input = torch.zeros(2, num_cat).to(torch.int32).to(DEVICE)
+    continuous_inputs = torch.zeros(2, num_cont).to(torch.float32).to(DEVICE)
 
 
     # HINT: input is chosen since model takes a tuple of inputs, normally name of inputs is used
@@ -82,3 +83,20 @@ def run_exported_tensor_model(pt2_path, cat, cont):
     exp = torch.export.load(pt2_path)
     scores = exp.module()(cat, cont)
     return scores
+
+
+if __name__ == "__main__":
+    import pathlib
+    import argparse
+
+    p = argparse.ArgumentParser(description="Export model to torch-export (.pt2) with dynamic batch dim")
+    p.add_argument("--model_path", "-m", required=True, help="Path to the model file (file or checkpoint) to load")
+    p.add_argument("--fold", "-f", required=True, help="Fold number", default=0)
+
+    args = p.parse_args()
+
+    model = torch.load(args.model_path, weights_only=False)
+    model.eval()
+    torch_export_v2(model, name=pathlib.Path(args.model_path).stem, fold=args.fold)
+
+    from IPython import embed; embed(header="string - 94 in export.py ")

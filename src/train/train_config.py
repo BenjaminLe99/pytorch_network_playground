@@ -28,6 +28,7 @@ model_building_config = {
     "skip_connection_init": 1,
     "freeze_skip_connection": True,
     "batch_norm_eps" : 0.001, # marcel : 0.001
+    "LBN_M" : 10,
 
 }
 
@@ -46,16 +47,18 @@ config = {
     "sample_ratio" : {"dy": 1/3, "tt": 1/3, "hh": 1/3},
     "min_events_in_batch": 1,
 
-    "save_model_name" : "model_nr4",
+    "save_model_name" : "model_nr5_lbn_asam",
     "early_stopping_patience" : 10, # marcel : 10
     "early_stopping_min_delta" : 0, # marcel : 0
     "get_batch_statistic_return_dummy" : False,
     "load_marcel_stats" : False,
     "load_marcel_weights" : False,
+    "training_fn" : "default", # chooses the training function
+    "validation_fn" : "default"
 }
 
 scheduler_config = {
-    "patience" : 4, # marcel : 10
+    "patience" : 10, # marcel : 10
     "min_delta" : 0.01, # marcel : 0
     "threshold_mode" : "abs", # marcel : abs
     "factor" : 0.5,

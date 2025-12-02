@@ -13,7 +13,7 @@ import optimizer
 from train_config import (
     config, dataset_config, model_building_config, optimizer_config, target_map, scheduler_config
 )
-from train_utils import training, validation, log_metrics
+from train_utils import training_fn, validation_fn, log_metrics
 from early_stopping import EarlyStopSignal, EarlyStopOnPlateau
 from export import torch_save, torch_export_v2
 import marcel_weight_translation as mwt
@@ -66,7 +66,6 @@ for current_fold in (config["train_folds"]):
         train=False,
         sample_ratio=config["sample_ratio"],
     )
-
     # share relative weight from training batch statistic to validation sampler
     training_sampler.share_weights_between_sampler(validation_sampler)
 
@@ -80,9 +79,12 @@ for current_fold in (config["train_folds"]):
     )
 
     ### Model setup
-    model = create_model.BNetDenseNet(dataset_config["continous_features"], dataset_config["categorical_features"], config=model_building_config)
+    # model = create_model.BNetDenseNet(dataset_config["continous_features"], dataset_config["categorical_features"], config=model_building_config)
+    model = create_model.BNetLBNDenseNet(
+        dataset_config["continous_features"], dataset_config["categorical_features"], config=model_building_config
+        )
     model = model.to(DEVICE)
-
+    # from IPython import embed; embed(header="string - 86 in train.py ")
     # ## load mean from marcel if activated
     model = mwt.load_marcels_weights(model, continous_features=dataset_config["continous_features"], with_std=config["load_marcel_stats"], with_weights=config["load_marcel_weights"])
 
@@ -90,6 +92,8 @@ for current_fold in (config["train_folds"]):
     # TODO : SAMW Optimizer
     weight_decay_parameters = optimizer.prepare_weight_decay(model, optimizer_config)
     optimizer_inst = torch.optim.AdamW(list(weight_decay_parameters.values()), lr=optimizer_config["lr"])
+    # optimizer_inst = optimizer.SAM(list(weight_decay_parameters.values()), torch.optim.AdamW, lr=optimizer_config["lr"], rho = 2.0, adaptive=True)
+
     scheduler_inst = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer=optimizer_inst,
         mode='min',
@@ -106,13 +110,10 @@ for current_fold in (config["train_folds"]):
     # HINT: requires only logits, no softmax at end
     loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
 
-
-
     model.train()
-
     ### training loop:
     for current_iteration in range(1_000_000):
-        t_loss, (t_pred, t_targets) = training(
+        t_loss, (t_pred, t_targets) = training_fn(
             model = model,
             loss_fn = loss_fn,
             optimizer = optimizer_inst,
@@ -129,7 +130,7 @@ for current_fold in (config["train_folds"]):
         if (current_iteration % config["validation_interval"] == 0):
             # evaluation of training data
             print(f"Running evaluation of training data at iteration {current_iteration}...")
-            eval_t_loss, (eval_t_pred, eval_t_tar, eval_t_weights) = validation(model, loss_fn, training_sampler, device=DEVICE)
+            eval_t_loss, (eval_t_pred, eval_t_tar, eval_t_weights) = validation_fn(model, loss_fn, training_sampler, device=DEVICE)
             log_metrics(
                 tensorboard_inst = tboard_writer,
                 iteration_step = current_iteration,
@@ -141,7 +142,7 @@ for current_fold in (config["train_folds"]):
             )
             print(f"Running evaluation of validation data at iteration {current_iteration}...")
             # evaluation of validation
-            eval_v_loss, (eval_v_pred, eval_v_tar, eval_v_weights) = validation(model, loss_fn, validation_sampler, device=DEVICE)
+            eval_v_loss, (eval_v_pred, eval_v_tar, eval_v_weights) = validation_fn(model, loss_fn, validation_sampler, device=DEVICE)
             log_metrics(
                 tensorboard_inst = tboard_writer,
                 iteration_step = current_iteration,
