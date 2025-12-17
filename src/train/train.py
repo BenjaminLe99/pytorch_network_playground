@@ -59,17 +59,13 @@ if __name__ == '__main__':
     tboard_writer = TensorboardLogger(name=hash_config(config))
     logger.warning(f"Tensorboard logs are stored in {tboard_writer.path}")
     for current_fold in (config["train_folds"]):
-        logger.info(f'Start Training of fold {current_fold} from {config["k_fold"] - 1}')
-
-
+        logger.info(f"Start Training of fold {current_fold} from {config["k_fold"] - 1}")
         ### data preparation
         # HINT: order matters, due to memory constraints views are moved in and out of dictionaries
 
         # load data from cache is necessary or from root files
-        # events is of form : {uid : {"continous","categorical", "weight": torch tensor}
-        # events = get_data(dataset_config, overwrite=False, _save_cache=True)
-        # create k-folds, whe current fold is test fold and leave out
-        events = get_data(dataset_config, overwrite=False, _save_cache=True)
+        # events is of form : {uid : {"continous","categorical", "weight": torch tensor}}
+        events = get_data(dataset_config, overwrite=kwargs["overwrite"], _save_cache=kwargs["save_cache"])
 
         train_data, validation_data = split_k_fold_into_training_and_validation(
             events,
@@ -99,7 +95,6 @@ if __name__ == '__main__':
         training_sampler.share_weights_between_sampler(validation_sampler)
 
         # get weighted mean and std of expected batch composition
-
         model_building_config["mean"], model_building_config["std"] = get_batch_statistics_from_sampler(
             training_sampler,
             padding_values=-99999,
@@ -107,21 +102,23 @@ if __name__ == '__main__':
             return_dummy=config["get_batch_statistic_return_dummy"],
         )
 
-        ### Model setup
+        ### model setup
         # model = create_model.BNetDenseNet(dataset_config["continous_features"], dataset_config["categorical_features"], config=model_building_config)
         model = create_model.BNetLBNDenseNet(
             dataset_config["continous_features"], dataset_config["categorical_features"], config=model_building_config
             )
-        model = model.to(DEVICE)
-        # from IPython import embed; embed(header="string - 86 in train.py ")
+        model = model.to(DEVICE).train()
+
         # ## load mean from marcel if activated
         model = mwt.load_marcels_weights(model, continous_features=dataset_config["continous_features"], with_std=config["load_marcel_stats"], with_weights=config["load_marcel_weights"])
 
-        # TODO: only linear models should contribute to weight decay
-        # TODO : SAMW Optimizer
+        # only linear layers contribute to weight decay
         weight_decay_parameters = optimizer.prepare_weight_decay(model, optimizer_config)
-        optimizer_inst = torch.optim.AdamW(list(weight_decay_parameters.values()), lr=optimizer_config["lr"])
-        # optimizer_inst = optimizer.SAM(list(weight_decay_parameters.values()), torch.optim.AdamW, lr=optimizer_config["lr"], rho = 2.0, adaptive=True)
+
+        if config["training_fn"] == "default":
+            optimizer_inst = torch.optim.AdamW(list(weight_decay_parameters.values()), lr=optimizer_config["lr"])
+        elif config["training_fn"] == "sam":
+            optimizer_inst = optimizer.SAM(list(weight_decay_parameters.values()), torch.optim.AdamW, lr=optimizer_config["lr"], rho = 2.0, adaptive=True)
 
         scheduler_inst = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer=optimizer_inst,
@@ -136,41 +133,33 @@ if __name__ == '__main__':
         )
 
         early_stopper_inst = EarlyStopOnPlateau()
-        # HINT: requires only logits, no softmax at end
-        loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
 
-        model.train()
-        ### training loop:
-        for current_iteration in range(config["max_train_iteration"]):
+        if config["loss_fn"] == "default":
+            train_loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
+            validation_loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
+        elif config["loss_fn"] == "signal_efficiency":
+            from loss import SignalEfficiency
+            train_loss_fn = SignalEfficiency(target_map=training_sampler.target_map, total_weights=training_sampler.total_weight ,device=DEVICE)
+            validation_loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
+
+        ### training loop
+        for current_iteration in range(1_000_000):
             t_loss, (t_pred, t_targets) = training_fn(
                 model = model,
-                loss_fn = loss_fn,
+                loss_fn = train_loss_fn,
                 optimizer = optimizer_inst,
                 sampler = training_sampler,
                 device=DEVICE
             )
-            if torch.isnan(t_loss):
-                print("NaN in batch loss")
-                from IPython import embed;embed(header=" string - 152 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/train.py")
 
-            # VERBOSITY
             if current_iteration % config["verbose_interval"] == 0:
                 tboard_writer.log_loss({"batch_loss": t_loss.item()}, step=current_iteration)
                 print(f"Training: {current_iteration} - batch loss: {t_loss.item():.4f}")
 
-            if (current_iteration % config["validation_interval"] == 0):
+            if (current_iteration % config["validation_interval"] == 0) & (current_iteration > 0):
                 # evaluation of training data
                 print(f"Running evaluation of training data at iteration {current_iteration}...")
-                eval_t_loss, (eval_t_pred, eval_t_tar, eval_t_weights) = validation_fn(model, loss_fn, training_sampler, device=DEVICE)
-
-                if eval_t_loss == 'nan':
-                    print('training loss is a nan')
-                    from IPython import embed;embed(header=" string - 158 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/train.py")
-                
-                if torch.isnan(eval_t_pred).any().item() == True:
-                    print("Found a nan in the training predictions")
-                    from IPython import embed;embed(header=" string - 161 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/train.py")
-
+                eval_t_loss, (eval_t_pred, eval_t_tar, eval_t_weights) = validation_fn(model, validation_loss_fn, training_sampler, device=DEVICE)
                 log_metrics(
                     tensorboard_inst = tboard_writer,
                     iteration_step = current_iteration,
@@ -179,21 +168,10 @@ if __name__ == '__main__':
                     mode = "train",
                     loss = eval_t_loss.item(),
                     lr = optimizer_inst.param_groups[0]["lr"],
-                    sampler = training_sampler,
-                    model = model
                 )
                 print(f"Running evaluation of validation data at iteration {current_iteration}...")
                 # evaluation of validation
-                eval_v_loss, (eval_v_pred, eval_v_tar, eval_v_weights) = validation_fn(model, loss_fn, validation_sampler, device=DEVICE)
-
-                if eval_v_loss == 'nan':
-                    print('validation loss is a nan')
-                    from IPython import embed;embed(header=" string - 158 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/train.py")
-                
-                if torch.isnan(eval_v_pred).any().item() == True:
-                    print("Found a nan in the validation predictions")
-                    from IPython import embed;embed(header=" string - 161 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/train.py")
-
+                eval_v_loss, (eval_v_pred, eval_v_tar, eval_v_weights) = validation_fn(model, validation_loss_fn, validation_sampler, device=DEVICE)
                 log_metrics(
                     tensorboard_inst = tboard_writer,
                     iteration_step = current_iteration,
@@ -204,26 +182,32 @@ if __name__ == '__main__':
                 )
                 print(f"Evaluation: it: {current_iteration} - TLoss: {eval_t_loss:.4f} VLoss: {eval_v_loss:.4f}")
 
-
                 # if (current_iteration % 1000 == 0) and (current_iteration > 0):
                 previous_lr =  optimizer_inst.param_groups[0]["lr"]
                 scheduler_inst.step(eval_v_loss)
-                logger.info(f"{previous_lr} -> { optimizer_inst.param_groups[0]['lr']}")
-
+                logger.info(f"{previous_lr} -> { optimizer_inst.param_groups[0]["lr"]}")
 
                 ### early stopping
                 # when val loss is lowest over a period of patience
                 if early_stopper_inst(eval_v_loss, model):
                     logger.info(f"saving current best model at iteration {current_iteration} with loss {eval_v_loss:.5f}")
                     torch_save(model, config["save_model_name"], current_fold)
-                    # torch_export_v2(model, config["save_model_name"], current_fold)
 
                 # TODO release DATA from previous RUN
                 if (current_iteration % config["max_train_iteration"] == 0) & (current_iteration > 0):
                     from IPython import embed; embed(
                         header=f"Current break at {current_iteration} if you wanna continue press y else save")
 
-
-
         from IPython import embed; embed(header="END - 89 in train.py ")
 
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train model runner")
+    parser.add_argument("--overwrite", action="store_true", default=False, help="Overwrite cached data if present (default: False)")
+    parser.add_argument("--no-save-cache", dest="save_cache", action="store_false", help="Do not save loaded data to cache (default: save cache)")
+
+    args = parser.parse_args()
+
+    # call main with parsed args
+    main(overwrite=args.overwrite, save_cache=args.save_cache)

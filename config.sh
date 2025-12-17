@@ -4,8 +4,7 @@ export TRAINING_DIR=${STORE_DIR}/training/results
 export CACHE_DIR=${STORE_DIR}/cache
 export PICTURE_DIR=${STORE_DIR}/pictures/features
 export MODELS_DIR=${STORE_DIR}/models
-#export INPUT_DATA_DIR="/data/dust/user/riegerma/hh2bbtautau/run3_training_data/prod19"
-export INPUT_DATA_DIR="/data/dust/user/riegerma/hh2bbtautau/run3_training_data/prod14"
+export INPUT_DATA_DIR="/data/dust/user/riegerma/hh2bbtautau/run3_training_data/prod20_vbf"
 export ML_ENV="ml_pytorch"
 export PYTHONPATH=$(pwd)/src
 echo "config loaded."

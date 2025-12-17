@@ -14,7 +14,8 @@ class Dataset(t_data.Dataset):
         weight: torch.Tensor=None,
         name: str=None,
         dataset_type: str=None,
-        randomize: bool =True
+        randomize: bool =True,
+        eval_weight: torch.Tensor=None,
     ):
         self.continous_input = continous_tensor.to(torch.float32)
         self.categorical_input = categorical_tensor.to(torch.int32)
@@ -26,6 +27,7 @@ class Dataset(t_data.Dataset):
         self.dataset_type = dataset_type
         self.sample_size = len(self)
         self.relative_weight = None
+        self.eval_weight = eval_weight
 
     @property
     def uid(self):
@@ -44,7 +46,7 @@ class Dataset(t_data.Dataset):
         else:
             self.indices = torch.arange(len(self))
 
-    def sample(self, number=None):
+    def sample(self, number=None ,device=torch.device("cpu")):
         """
         Sample *number* of events from self.{continous,categorical,targets}.
         Samples from the start again, if maximum number of samples is reached.
@@ -72,11 +74,9 @@ class Dataset(t_data.Dataset):
         # do not drop last, but instead create smaller batch
         next_idx = min(self.current_idx + number, len(self))
         idx = self.indices[start_idx:next_idx]
-
-        # reset if we reached the end of the dataset and drop last incomplete batch
-        data = self.continous_input[idx], self.categorical_input[idx],self.targets[idx]
         self.current_idx = next_idx
-        return data
+
+        return self.continous_input[idx].to(device), self.categorical_input[idx].to(device), self.targets[idx].to(device)
 
     def batch_generator(self, batch_size=None, device=torch.device("cpu")):
         """
@@ -90,7 +90,7 @@ class Dataset(t_data.Dataset):
             device (torch.device, optional): Device to which tensors are moved before yielding. Defaults to torch.device("cpu").
 
         Yields:
-            tuple (torch.Tensor): Tuple with 3 torch tensors for categorical, continous and target data
+            tuple (torch.Tensor): Tuple with 3 torch tensors for categorical, continous and target data of the shape [batch_size, num_features]
         """
 
         # save current state of the sampler to restore after full iteration
@@ -110,12 +110,15 @@ class Dataset(t_data.Dataset):
             yield cont.to(device), cat.to(device), tar.to(device)
 
 class DatasetSampler(t_data.Sampler):
+    signal_background_map = {"hh": "signal", "tt":"background", "dy":"background"}
+
     def __init__(
         self,
         datasets_inst=None,
         batch_size=1,
         sample_ratio={"dy": 0.25, "tt": 0.25, "hh": 0.5},
         min_size = None,
+        target_map = None,
         ):
         self.total_weight = {"dy":0, "tt":0, "hh":0}
         self.dataset_inst = defaultdict(dict)  # {dataset_type: {process_id: dataset}}
@@ -125,6 +128,11 @@ class DatasetSampler(t_data.Sampler):
                 self.add_dataset(dataset)
         self.sample_ratio = sample_ratio
         self.min_size = min_size # index where to split continous and categorical data
+        self.target_map = target_map
+
+        # set attributes to access dataset properties directly from sampler
+        self.set_attr(["weight", "relative_weight", "sample_size", "dataset_type", "batch_generator"])
+
 
     def __getitem__(self, uid):
         return self.flat_datasets()[uid]
@@ -147,7 +155,7 @@ class DatasetSampler(t_data.Sampler):
         return self.apply_func_on_datasets(len)
 
     def __len__(self):
-        return sum(list(self.events_per_dataset()).values())
+        return sum(list(self.events_per_dataset().values()))
 
     def add_dataset(self, dataset):
         # {era : process_id: {array}}
@@ -219,7 +227,6 @@ class DatasetSampler(t_data.Sampler):
         # define mask for floor and ceil
         # median -> even: under median so idx len/2 - 1 (change mask to inclusive)
         # median -> uneven: exact middle idx len/2
-
         # even uneven median treatment
         if len(floored_oveflow_idx) % 2 == 0:
             median = floored_oveflow_idx.median()
@@ -236,6 +243,7 @@ class DatasetSampler(t_data.Sampler):
 
         # step 4: apply overflow to original floored
         # combine sort indices and threshold mask
+        # this returns floored sizes sorted by biggest by indices
         indices_above_threshold = torch.arange(len(floored_sizes))[mask_above_threshold][floored_oveflow_idx]
         floored_sizes[indices_above_threshold] -= floored_overflow_sizes
 
@@ -250,13 +258,15 @@ class DatasetSampler(t_data.Sampler):
 
         # TODO BETTER SCHEME
         # remove remaining from biggest sample or add more to biggest sample
-        if very_last_remaining <= -1:
-            floored_sizes[indices_above_threshold[-1]] -= very_last_remaining
-        elif very_last_remaining >= 1:
-            floored_sizes[indices_above_threshold[-1]] -= very_last_remaining
-        elif very_last_remaining != 0:
-            from IPython import embed; embed(header=f"{floored_sizes.sum()} but should be {sub_batch_size}")
-            raise ValueError(f"Resampling failed: Created batch size of size: {floored_sizes.sum()} but should be {sub_batch_size}")
+
+        floored_sizes[indices_above_threshold[0]] -= very_last_remaining
+        # if very_last_remaining <= -1:
+        #     floored_sizes[indices_above_threshold[0]] -= very_last_remaining
+        # elif very_last_remaining >= 1:
+        #     floored_sizes[indices_above_threshold[0]] -= very_last_remaining
+        # elif very_last_remaining != 0:
+        #     from IPython import embed; embed(header=f"{floored_sizes.sum()} but should be {sub_batch_size}")
+        #     raise ValueError(f"Resampling failed: Created batch size of size: {floored_sizes.sum()} but should be {sub_batch_size}")
 
         # store batch size per phase space in dataset
         if not dry:
@@ -265,33 +275,51 @@ class DatasetSampler(t_data.Sampler):
         else:
             logger.info({k:w.item() for k,w in zip(keys, floored_sizes)})
 
-    def sample_batch(self, device=torch.device("cpu"), shuffle_batch=True):
+    def sample_batch(self, device=torch.device("cpu")):
         # loop over dataset classes and ask them to generate a certain number of samples
 
         # shuffle finished batch optionally
         # Get a batch of data from each dataset
-        batch_cont, batch_cat, batch_target = [], [], []
+        batch_cont, batch_cat, batch_target, batch_weight = [], [], [], []
 
-        # from IPython import embed; embed(header="GETBATCH - 66 in datasets.py ")
-        for _, uid in self.dataset_inst.items():
-            for ds in uid.values():
-                cont, cat, target = ds.sample()
-                batch_cont.append(cont), batch_cat.append(cat), batch_target.append(target)
+        sample_indices = {
+            "signal":[],
+            "background":[],
+        }
 
-        batch_cont = torch.concatenate(batch_cont, dim=0)
-        batch_cat = torch.concatenate(batch_cat, dim=0)
-        batch_target = torch.concatenate(batch_target, dim=0)
+        # do iteration over keys to GUARANTEE deterministic behavior when looping accross different python version
+        for uid, ds in sorted(self.flat_datasets().items()):
+            cont, cat, target = ds.sample(device=device)
+            batch_cont.append(cont), batch_cat.append(cat), batch_target.append(target), batch_weight.append(torch.full((target.shape[0], 1), ds.weight))
+            sample_indices[self.signal_background_map[ds.dataset_type]].append(target.shape[0])
 
-        if shuffle_batch:
-            # needs to be depending on data due to last incomplete batch
-            indices = torch.randperm(batch_cont.shape[0])
-            batch_cont = batch_cont[indices]
-            batch_cat = batch_cat[indices]
-            batch_target = batch_target[indices]
-        return batch_cont.to(device), batch_cat.to(device), batch_target.to(device)
+        # combine everything into tensors
+        batch_cont = torch.concatenate(batch_cont, dim=0).to(device)
+        batch_cat = torch.concatenate(batch_cat, dim=0).to(device)
+        batch_target = torch.concatenate(batch_target, dim=0).to(device)
+        batch_weight = torch.concatenate(batch_weight, dim=0).to(device)
+        return batch_cont, batch_cat, batch_target, batch_weight, sample_indices
 
-    def get_dataset_batch_generators(self, **kwargs):
-        return {uid: dataset.batch_generator(**kwargs) for uid, dataset in self.flat_datasets().items()}
+    def set_attr(self, attribute):
+        if isinstance(attribute, str):
+            attribute = [attribute]
+
+        for attr in attribute:
+            if hasattr(self, attr):
+                raise AttributeError(f"Attribute {attr} already exists in sampler class.")
+
+            def _accesor(*args, dataset_attr=attr, **kwargs):
+                collector = {}
+                for uid, ds in self.flat_datasets().items():
+                    ds_attr = getattr(ds, dataset_attr)
+                    # when attribute is a callable function pass args and kwargs
+                    if callable(ds_attr):
+                        collector[uid] = ds_attr(*args, **kwargs)
+                    else:
+                        collector[uid] = ds_attr
+                return collector
+
+            setattr(self, attr, _accesor)
 
     def share_weights_between_sampler(self, dst_sampler):
         # helper to enable ex. validation sampler to get sampling weight from training sampler

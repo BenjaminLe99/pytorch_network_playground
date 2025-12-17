@@ -78,42 +78,35 @@ def get_batch_statistics_from_sampler(sampler, padding_values=None, features=Non
     weights_dict = sampler.get_attribute_of_datasets("relative_weight")
     sum_of_weights = sum(list(weights_dict.values()))
 
-    # for each uid calculate mean,std and get weight
-    # do weighted mean,std over all uid with weight
+    # for each process id calculate weighted mean, std for each feature representing batch statistics
     for current_pid_idx, pid in enumerate(features_dict.keys(), start = 1):
-        # go throught each feature axis and calculate statitic per feature
-        f_means, f_vars = [], []
+        # get array of specific process id - [num_events x num_features]
         array = features_dict[pid]
+
+        print(f"\rcalculating stats for {pid}:{current_pid_idx}/{len(features_dict)}\x1b[K",end="", flush=True)
+
+        # mean and var calculation should exclude padding values
+        # if padding value shape is 1 -> expand to num_feature or equals num_features
         num_f = array.shape[-1]
-        print(f"calculating stats for {pid} status:{current_pid_idx}/{len(features_dict)}\t\t\t\r",end=" ", flush=True)
-
-
-        for f_idx in range(num_f):
-
-            # extract feature by index
-            feature_array = array[..., f_idx]
-            # do not include padding into calculation
-            if isinstance(padding_values, (list, tuple)):
-                padding_value = padding_values[f_idx]
-            else:
-                padding_value = padding_values
-
-            padding_mask = (feature_array == padding_value)
-            masked_array = feature_array[~padding_mask]
-
-            masked_mean = masked_array.mean(axis=0)
-            masked_var = masked_array.var(axis=0)
-            # if anything got a nan go into debug mode to investigate
-            if torch.isnan(masked_mean):
-                from IPython import embed; embed(header=f"{pid} is nan check feature_array and sampler")
-
-            f_means.append(masked_mean)
-            f_vars.append(masked_var)
+        ignore_tensor = torch.tensor(padding_values)
+        if ignore_tensor.shape == torch.Size([]):
+            ignore_tensor = torch.full((1, num_f), fill_value=padding_values)
+        elif ignore_tensor.shape != torch.Size([num_f]):
+            raise ValueError(f"Padding values need to be of shape [num_features] or single value, got {ignore_tensor.shape}")
+        # create and apply mask to include values
+        include_mask = ~(array == ignore_tensor)
+        masked_mean = torch.masked.mean(input=array, mask=include_mask, dim=0, dtype=torch.float64)
+        masked_var = torch.masked.var(input=array, mask=include_mask, dim=0, dtype=torch.float64)
+        if torch.any(masked_mean.isnan()):
+            from IPython import embed; embed(header=f"{pid} is nan check feature_array and sampler")
 
         # weight mean and add to collection
+        # pid_weight = weights_dict[pid]
+        # weighted_means.append(torch.tensor(f_means) * pid_weight)
+        # weighted_vars.append(torch.tensor(f_vars) * pid_weight)
         pid_weight = weights_dict[pid]
-        weighted_means.append(torch.tensor(f_means) * pid_weight)
-        weighted_vars.append(torch.tensor(f_vars) * pid_weight)
+        weighted_means.append(masked_mean * pid_weight)
+        weighted_vars.append(masked_var * pid_weight)
 
     # calculate weighted average over uid means and var
     w_avg_mean  = torch.sum(torch.stack(weighted_means, axis=0), axis = 0) / sum_of_weights
@@ -287,8 +280,8 @@ def split_k_fold_into_training_and_validation(events_dict, c_fold, k_fold, seed,
     train, valid = {}, {}
     for uid in list(events_dict.keys()):
         array = events_dict.pop(uid)
-        train[uid] = {"weight" : array["weight"]}
-        valid[uid] = {"weight" : array["weight"]}
+        train[uid] = {"weight" : array["weight"], "total_evaluation_weight": array["total_evaluation_weight"]}
+        valid[uid] = {"weight" : array["weight"], "total_evaluation_weight": array["total_evaluation_weight"]}
         tv_indices = k_fold_indices(array["event_id"], c_fold, k_fold, seed, test=return_test)
         t_idx, v_idx = split_array_to_train_and_validation(tv_indices, train_ratio)
 
@@ -314,8 +307,7 @@ def create_train_or_validation_sampler(events, target_map, batch_size, min_size=
     if not events:
         logger.warning(f"Sampler is not created due to feeding empty events")
         return None
-
-    DatasetManager = DatasetSampler(None, batch_size=batch_size, min_size=min_size, sample_ratio=sample_ratio)
+    DatasetManager = DatasetSampler(None, batch_size=batch_size, min_size=min_size, sample_ratio=sample_ratio, target_map = target_map)
     for uid in list(events.keys()):
         (dataset_type, process_id) = uid
         arrays = events.pop(uid)
@@ -333,6 +325,7 @@ def create_train_or_validation_sampler(events, target_map, batch_size, min_size=
             weight=arrays["weight"],
             name=process_id,
             dataset_type=dataset_type,
+            eval_weight=arrays["total_evaluation_weight"],
         )
         DatasetManager.add_dataset(era_dataset)
         logger.info(f"Add {dataset_type} pid: {process_id}")

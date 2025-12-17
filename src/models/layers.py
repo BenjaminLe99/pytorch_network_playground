@@ -611,7 +611,7 @@ class StandardizeLayer(torch.nn.Module):  # noqa: F811
 
     def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
         x = (x - self.mean) / self.std
-        return x
+        return x.to(torch.float32)
 
     def _type_check(self, mean: torch.FloatTensor, std: torch.FloatTensor):
         if not all([isinstance(value, torch.Tensor) for value in [mean, std]]):
@@ -903,9 +903,7 @@ class LBN(torch.nn.Module):
     def update_boosted_vectors(self, boosted_vecs: torch.Tensor) -> torch.Tensor:
         return boosted_vecs
 
-    def forward(self, input_vecs, debug=False) -> torch.Tensor:
-        if debug:
-            from IPython import embed; embed(header="DEBUGGING LBN - 895 in layers.py ")
+    def forward(self, input_vecs) -> torch.Tensor:
         # e, px, py, pz: (B, N)
         E, PX, PY, PZ = range(4)
 
@@ -945,7 +943,7 @@ class LBN(torch.nn.Module):
 
         # create boost objects
         restframe_m = (restframe_vecs[..., E]**2 - restframe_p**2)**0.5  # (B, M)
-        gamma = restframe_vecs[..., E] / (self.eps + restframe_m)  # (B, M)
+        gamma = restframe_vecs[..., E] / (restframe_m + self.eps) # (B, M)
         beta = restframe_p / restframe_vecs[..., E]  # (B, M)
         beta_vecs = restframe_vecs[..., PX:] / restframe_vecs[..., E, None]  # (B, M, 3)
         n_vecs = beta_vecs / beta[..., None]  # (B, M, 3)
@@ -1084,8 +1082,6 @@ class LBNFeaturerExtractor(torch.nn.Module):
         return self.slice_particles_from_tensor(x)
         # return the indices of all particle features so the layer can slice them from tensors
 
-
-
 class LBN_DNN(torch.nn.Module):
     def __init__(
         self,
@@ -1106,8 +1102,17 @@ class LBN_DNN(torch.nn.Module):
     def ndim(self):
         return self.lbn.ndim()
 
-    def forward(self, x, debug=False):
+    def forward(self, x):
         x = self.lbn_feature_extractor(x)
-        x = self.lbn(x, debug)
+        x = self.lbn(x)
         x = self.lbn_batch_norm(x)
         return x
+
+class TemperaturCalibrationLayer(torch.nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.temperature = torch.nn.Parameter(torch.ones(1))
+        self.activation = torch.nn.Softmax(dim=1)
+
+    def __call__(self, x):
+        return self.activation(x / self.temperature)

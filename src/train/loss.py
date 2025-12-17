@@ -2,6 +2,155 @@ from __future__ import annotations
 
 import torch
 
+
+
+
+
+class SignalEfficiency(torch.nn.Module):
+    def __init__(self, target_map, total_weights, device, *args, **kwargs):
+        super().__init__()
+        self.target_map = target_map
+        self.s_cls = self.target_map["hh"]
+        self.total_weights = total_weights
+        self.device = device
+
+    def s(self, prediction, truth, weight):
+        # true positive weighted by signal node
+        return weight * torch.sum(truth[:, self.s_cls] * prediction[:, self.s_cls])
+
+    def b(self, prediction, truth, weight):
+        # false negative
+        return weight * torch.sum((1 - truth[:, self.s_cls]) * prediction[:, self.s_cls])
+
+    def _loss_v1(self, prediction, truth, weight):
+        s_weight = weight["signal"]
+        b_weight = weight["background"]
+        s = self.s(prediction, truth, s_weight)
+        b = self.b(prediction, truth, b_weight)
+        loss = s / (s + b)**0.5
+        return 1 / loss
+
+    def _loss_asm(self, prediction, truth, weight):
+        s_weight = weight["signal"]
+        b_weight = weight["background"]
+        s = self.s(prediction, truth, s_weight)
+        b = self.b(prediction, truth, b_weight)
+        sig_b = 0 # TODO wie berechnen?
+
+        ln = torch.log
+
+        N = s + b
+        B = b**2
+        Si = sig_b**2
+
+        first_term = N * ln(N * (b + Si) / B + N*Si)
+        second_term = (B / Si) * ln(1 + (Si * s)/(B + b*Si))
+
+        full_term = 2 * (first_term - second_term)
+        return torch.sqrt(full_term)
+
+
+    def forward(self, prediction, truth, weight, threshold = 0.5):
+        from IPython import embed; embed(header = " line: 59 in loss.py")
+
+
+        return None
+
+class ZScore(torch.nn.Module):
+    """
+    Calculates a surrogate loss by calculating signal efficiency for given *signal_cls_idx*.
+    This discrete value is used as an coefficient to amplify a given *base_loss_inst*, extending
+    this discrete values to be differentiable.
+
+    Idea come from https://arxiv.org/pdf/2412.09500
+
+    Args:
+        signal_cls_idx (int): Index of the signal class in the prediction/target tensors.
+        base_loss_inst (torch.nn.Module): Base loss function to be amplified.
+    """
+
+    def __init__(self, signal_cls_idx, base_loss_inst):
+        super().__init__()
+        self.signal_cls_idx = signal_cls_idx
+        self.eps = 1
+        self.base_loss_inst = base_loss_inst
+
+    def split_signal_and_background(self, pred, truth):
+        signal_events_idx = torch.min(torch.argwhere(truth[:,self.signal_cls_idx]))
+        signal_truth = truth[signal_events_idx:]
+        background_truth = truth[:signal_events_idx]
+        signal_pred = pred[signal_events_idx:]
+        background_pred = pred[:signal_events_idx]
+        return signal_pred, signal_truth, background_pred, background_truth
+
+    def get_slices(self, idx):
+        start = torch.tensor([0] + idx[:-1]).cumsum(0).tolist()
+        end = torch.tensor(idx).cumsum(0).tolist()
+        return start, end
+
+    def signal_score(self, signal_prediction, signal_truth, weight, idx):
+        start_idx, end_idx = self.get_slices(idx["signal"])
+
+        signal_scores = []
+        for current_signal_idx, (l, r) in enumerate(zip(start_idx, end_idx)):
+            # select sub batches
+            sub_targets = signal_truth[l:r]
+            sub_predictions = signal_prediction[l:r]
+
+            pred_cls = torch.argmax(sub_predictions, dim=1)
+            truth_cls = torch.argmax(sub_targets, dim=1)
+
+            # false negative is any bg classified as signal
+            # TODO: differitiazion between multiple signal will not work with this code
+            fn_signal = torch.sum(pred_cls != truth_cls)
+
+            # calculate weighted fraction of correctly classified signal events
+            num_signal = len(sub_targets)
+            fraction = (num_signal - fn_signal)/num_signal
+            score = fraction * weight["signal"][current_signal_idx]
+            signal_scores.append(score)
+        return torch.tensor(signal_scores)
+
+    def background_scores(self, background_pred, background_truth, weight, idx):
+        """ calculates for each background sample the sqrt of the score based on misclassification into signal"""
+        start_idx, end_idx = self.get_slices(idx["background"])
+
+        bg_scores = []
+        # HINT: this score does not differentiate between different background types
+        for current_bg_idx, (l, r) in enumerate(zip(start_idx, end_idx)):
+            sub_targets = background_truth[l:r]
+            sub_predictions = background_pred[l:r]
+
+            pred_cls = torch.argmax(sub_predictions, dim=1)
+
+            # false negative in the case of background is signal classified as background, thus being signal_cls
+            # TODO maybe include misclassification into other background classes as well?
+            fn_signal_as_bg = torch.sum(pred_cls == self.signal_cls_idx)
+
+            num_bg = len(sub_targets)
+            rate_of_miscl_into_signal  = (fn_signal_as_bg) / num_bg
+            score = torch.sqrt(
+                rate_of_miscl_into_signal * weight["background"][current_bg_idx] + self.eps
+                )
+            bg_scores.append(score)
+        return torch.tensor(bg_scores)
+
+    def forward(self, pred, truth, weight, idx):
+        signal_predictions, signal_truth, background_prediction, background_truth = self.split_signal_and_background(pred, truth)
+        # separate signal and background
+
+        signal_fraction_score = torch.sum(self.signal_score(signal_predictions, signal_truth, weight, idx))
+        background_fraction_score = torch.sum(self.background_scores(background_prediction, background_truth, weight, idx))
+
+        max_score = torch.sum(torch.tensor(weight["signal"])) / self.eps**0.5
+        # print(signal_fraction_score, background_fraction_score, max_score)
+        coefficient = (max_score - signal_fraction_score) / background_fraction_score
+        loss = self.base_loss_inst(pred, truth)
+        if torch.isnan(coefficient) or torch.isnan(loss):
+            from IPython import embed; embed(header="Either coefficient or loss is NaN")
+        return loss * coefficient
+
+
 class WeightedCrossEntropy(torch.nn.CrossEntropyLoss):
     def forward(self, input, target, weight: torch.Tensor | None = None):
         # save original reduction mode
@@ -20,6 +169,7 @@ class WeightedCrossEntropy(torch.nn.CrossEntropyLoss):
         else:
             loss = super().forward(input, target)
         return loss
+
 
 class FocalLoss(torch.nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', task_type='binary', num_classes=None):

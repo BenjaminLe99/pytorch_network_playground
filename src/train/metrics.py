@@ -2,31 +2,69 @@ import torch
 import sklearn.metrics
 
 
-def rates_binary(target, pred, threshold=0.5):
-    tp = torch.sum((target == 1) & (pred > threshold))
-    tn = torch.sum((target == 0) & (pred < threshold))
-    fp = torch.sum((target == 0) & (pred > threshold))
-    fn = torch.sum((target == 1) & (pred < threshold))
+### Metrics and tools for binary classification
+def binary_true_positive(target, pred, threshold=0.5):
+    # target is positive, and identified as positive
+    return torch.sum((target == 1) & (pred > threshold))
+
+def binary_true_negative(target, pred, threshold=0.5):
+    # target is negative, and identified as positive
+    return torch.sum((target == 0) & (pred < threshold))
+
+def binary_false_positive(target, pred, threshold=0.5):
+    # target is negative, but identified as positive
+    return torch.sum((target == 0) & (pred > threshold))
+
+def binary_false_negative(target, pred, threshold=0.5):
+    # target is positive, but identified as negative
+    return torch.sum((target == 1) & (pred < threshold))
+
+def binary_rates(target, pred, threshold=0.5):
+    # calculate all classification rates for binary classification
+    tp = binary_true_positive(target, pred, threshold)
+    tn = binary_true_negative(target, pred, threshold)
+    fp = binary_false_positive(target, pred, threshold)
+    fn = binary_false_negative(target, pred, threshold)
     return tp, tn, fp, fn
 
-def rates_multiclass(targets, predictions, weights=None):
+### Metrics and tools for multi-class classification
+def map_prediction_to_binary(prediction):
+    """
+    Helper to map prediction tensor to a binary one-hot encoded tensor based on arg max
+
+    Args:
+        prediction (torch.tensor): tensor of shape (num_events, num_classes) with class scores/probabilities
+
+    Returns:
+        torch.tensor: binary one-hot encoded tensor of same shape as *prediction*
+    """
+
+    _prediction = torch.zeros_like(prediction)
+    _predicted_class = torch.argmax(prediction, dim=1)
+    # index enables to set values at specific indices by using a source
+    _prediction = _prediction.scatter_(dim=1, index=_predicted_class.unsqueeze(1), value=1)
+    return _prediction
+
+def multiclass_rates(targets, predictions, weights=None, dtype=torch.int32):
     """
     Calculate tp, tn, fp, fn for a 'Multi Label Classifier' by utilizing the *targets and *predictions* tensors.
     If a *weights* of events is given, this is applied to the rates calculation.
+    The result is a tensor of shape (num_classes, 4) where each row corresponds to a class and contains tp, tn, fp, fn.
+
+    To get the right score for the current class slice the returned tensor by class index.
+    Example if the current class is in targets on index 1 one gets tp, tn, fp, fn by:
+        tp, tn, fp, fn = rates[0]
 
     Args:
-        targets (_type_): _description_
-        pred (_type_): _description_
-        weights (_type_, optional): _description_. Defaults to None.
+        targets (torch.tensor): truth tensor of shape (num_events, num_classes) in one-hot encoded form
+        pred (torch.tensor): prediction tensor of shape (num_events, num_classes) with class scores/probabilities
+        weights (torch.tensor, optional): Event based weights. Defaults to None.
 
     Returns:
-        _type_: _description_
+        torch.tensor: tensor of shape (num_classes, 4) with tp, tn, fp, fn per class
     """
     # get predicted class by ceil arg max index and floor everything else
-    _prediction = torch.zeros_like(predictions)
-    _predicted_class = torch.argmax(predictions, dim=1)
-    # index enables to set values at specific indices by using a source
-    _prediction = _prediction.scatter_(dim=1, index=_predicted_class.unsqueeze(1), value=1)
+    _prediction = map_prediction_to_binary(prediction=predictions)
 
     # bring weights in correct form for broadcasting
     if weights is None:
@@ -41,33 +79,75 @@ def rates_multiclass(targets, predictions, weights=None):
 
     # stack rates into tensor, slice by truth class index
     # returns tp, tn, fp, fn for each class in order
-    rates = torch.stack((tp_diag, tn_rest, fp_per_column, fn_per_line), dim=1)
+    rates = torch.stack((tp_diag, tn_rest, fp_per_column, fn_per_line), dim=1).to(dtype)
     return rates
 
-def rates_from_matrix(confusion_matrix, class_idx):
+def confusion_matrix(targets, predictions, labels=None, sample_weight=None, normalized=None):
+    """
+    Calculates a Confusion Matrix using the truth *y_true* and prediction *y_pred* of the model.
+    The categories are defined using *target_map* and to weight give *sample_weight*. Styles are
+    changed using *cmap*.
+
+    Args:
+        y_true (torch.tensor): tensor of true labels
+        y_pred (torch.tensor): tensor of predicted labels
+        target_map (dict[int]): dict of class name to index mapping
+        sample_weight (torch.tensor, optional): tensor of weights on event basis. Defaults to None.
+        cmap (str, optional): style of the confusion matrix. Defaults to "Blues".
+
+    Returns:
+        tuple: figure, axis, confusion matrix
+    """
+    # convert prediction to class indices
+    y_pred = torch.argmax(predictions, dim=1).cpu()
+    y_true = torch.argmax(targets, dim=1).cpu()
+    cm = sklearn.metrics.confusion_matrix(
+        y_true,
+        y_pred,
+        labels=labels,
+        sample_weight=sample_weight,
+        normalize=normalized,  # normalize to get probabilities
+    )
+    return torch.tensor(cm)
+
+def confusion_matrix_rates(confusion_matrix, class_idx):
+    """
+    Extract the rates for a given *class_idx* from a given *confusion matrix*
+
+    Args:
+        confusion_matrix (torch.tensor): confusion matrix of shape (num_classes, num_classes)
+        class_idx (int): _index of the class to extract rates for
+
+    Returns:
+        torch.tensor: tensor of shape (4,) with tp, tn, fp, fn for the given class
+    """
     tp = confusion_matrix[class_idx, class_idx]
     fn = torch.sum(confusion_matrix[class_idx, :]) - tp
     fp = torch.sum(confusion_matrix[:, class_idx]) - tp
     tn = torch.sum(confusion_matrix) - (tp + fn + fp)
-    return tp, tn, fp, fn
+    return torch.stack((tp, tn, fp, fn))
 
-# def precision(tp, tn, fp, fn):
-#     return (tp + tn) / (tp + tn + fp + fn)
+
+### Common Metrics, one needs to calculate rates first!
+def accuracy(tp, tn, fp, fn):
+    # how many samples were correctly classified (true positive and true negative)
+    return (tp + tn) / (tp + tn + fp + fn)
 
 def precision(tp, fp):
-    # precision measures the model's ability to identify instances of a particular class correctly
+    # how many of the positive predictions were actually correct
     return tp / (tp + fp)
 
 def sensitivity(tp, fn):
-    # recall measures the model's ability to identify all instances of a particular class.
+    # how many targets of a class were correctly identified
     return tp / (tp + fn)
 
 def recall(tp, fn):
+    # same as sensitivity
     return sensitivity(tp, fn)
 
 def calculate_metrics(target, pred, label=None, weights=None, normalize=False):
     metrics = {}
-    rates = rates_multiclass(target, pred, weights=weights)
+    rates = multiclass_rates(target, pred, weights=weights)
     num_cls = target.shape[-1]
     for c in range(num_cls):
         tp, tn, fp, fn = rates[c]
@@ -80,7 +160,7 @@ def calculate_metrics(target, pred, label=None, weights=None, normalize=False):
 
         _precision = precision(tp, fp,)
         _sensitivity = sensitivity(tp, fn)
-        _f1_score = F1_score(_precision, _sensitivity)
+        _f1_score = F1_macro_score(_precision, _sensitivity)
         if label is not None:
             c = label[c]
         metrics[c] = {
@@ -94,13 +174,21 @@ def calculate_metrics(target, pred, label=None, weights=None, normalize=False):
             }
     return metrics
 
-# TODO: use output of calculate metrics to get macro metrics, do not recalculate
-def calculate_macro_metrics(metrics):
-    pass
+def _F1_macro_score(precision, recall, weights=None):
+    f1 = (2 * (precision * recall) / (precision + recall))
+    if weights is None:
+        return torch.mean(f1, dim = 0)
+    f1 = weights * f1
+    return torch.sum(2 * (precision * recall) / (precision + recall), dim = 0)
 
-def F1_score(precision, recall):
-    return 2 * (precision * recall) / (precision + recall)
+def F1_macro_score(prediction, target, weights=None):
+    # calculate precision and recall for all classes
+    rates = multiclass_rates(target, prediction)
+    tp , fp, fn  = rates[:, 0], rates[:, 2], rates[:, 3]
 
+    _precision = precision(tp = tp, fp = fp)
+    _recall = recall(tp = tp, fn = fn)
+    return _F1_macro_score(_precision, _recall, weights=weights)
 
 def auc(fp, tp):
     return sklearn.metrics.auc(fp, tp)

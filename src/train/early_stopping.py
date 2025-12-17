@@ -49,7 +49,6 @@ class EarlyStopOnPlateau:
             self.previous_validation_loss = loss
             self.best_model = model.state_dict().copy()
             self.steps_ago = 0
-            print("early stop criteria triggered")
             return True
         return False
 

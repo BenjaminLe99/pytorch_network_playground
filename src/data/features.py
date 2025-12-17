@@ -1,4 +1,5 @@
 
+
 def expand(str_list):
     def brace_expand(s):
         # "a{b,c}d" -> ["abd", "acd"]
@@ -23,8 +24,36 @@ def add_prefix(string, prefix, ignore_code="_"):
     else:
         return prefix + string
 
+def prefix_map():
+    import os
+    import pathlib
+    stem = pathlib.Path(os.environ["INPUT_DATA_DIR"]).stem
+    stem_to_prefix = {
+    "prod14": "res_dnn_pnet",
+    "prod20_vbf": "reg_dnn_moe",
+    "prod20": "reg_dnn_moe",
+    "prod19": "res_dnn_pnet",
+    }
+    return stem_to_prefix[stem]
+
+def expected_embedding_inputs():
+    data_prefix = prefix_map()
+    embedding_expected_inputs = {
+        f"{data_prefix}_pair_type": [0, 1, 2],  # see mapping below
+        f"{data_prefix}_dm1": [-1, 0, 1, 10, 11],  # -1 for e/mu
+        f"{data_prefix}_dm2": [0, 1, 10, 11],
+        f"{data_prefix}_vis_tau1_charge": [-1, 1],
+        f"{data_prefix}_vis_tau2_charge": [-1, 1],
+        f"{data_prefix}_has_fatjet": [0, 1],  # whether a selected fatjet is present
+        f"{data_prefix}_has_jet_pair": [0, 1],  # whether two or more jets are present
+        # 0: 2016APV, 1: 2016, 2: 2017, 3: 2018, 4: 2022preEE, 5: 2022postEE, 6: 2023pre, 7: 2023post
+        f"{data_prefix}_year_flag": [0, 1, 2, 3, 4, 5, 6, 7],
+        "channel_id": [1, 2, 3],
+    }
+    return embedding_expected_inputs
+
 def input_features(debug=False, debug_length=3):
-    data_prefix = "reg_dnn_moe_" #prod20: reg_dnn_moe_, prod14: res_dnn_pnet_
+    data_prefix = prefix_map()
     categorical_features: list[str] = [
         "pair_type",
         # "_channel_id",
@@ -52,8 +81,8 @@ def input_features(debug=False, debug_length=3):
         "httfatjet_e", "httfatjet_px", "httfatjet_py", "httfatjet_pz",
     ]
 
-    continous_features =  [add_prefix(f, data_prefix, ignore_code="_") for f in continous_features]
-    categorical_features =  [add_prefix(f, data_prefix, ignore_code="_") for f in categorical_features]
+    continous_features =  [add_prefix(f, f"{data_prefix}_", ignore_code="_") for f in continous_features]
+    categorical_features =  [add_prefix(f, f"{data_prefix}_", ignore_code="_") for f in categorical_features]
 
     if debug:
         continous_features = continous_features[:debug_length]

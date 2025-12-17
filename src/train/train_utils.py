@@ -2,7 +2,7 @@ import torch
 import plotting
 import metrics
 import train_config
-
+from loss import ZScore
 functions = {}
 
 def register(fn):
@@ -11,7 +11,7 @@ def register(fn):
     return fn
 
 @register
-def training_default(model, loss_fn, optimizer, sampler, device):
+def training_defaultV2(model, loss_fn, optimizer, sampler, device):
     optimizer.zero_grad()
 
     cont, cat, targets = sampler.sample_batch(device=device)
@@ -40,11 +40,60 @@ def training_sam(model, loss_fn, optimizer, sampler, device):
     pred_2 = model(categorical_inputs=cat, continuous_inputs=cont)
     loss_fn(pred_2, targets).backward()
 
-
     optimizer.second_step(zero_grad=True)
 
     optimizer.enable_running_stats(model)  # <- this is the important line
     return loss, (pred, targets)
+
+@register
+def training_default(model, loss_fn, optimizer, sampler, device):
+    optimizer.zero_grad()
+
+    cont, cat, targets, weight, idx = sampler.sample_batch(device=device)
+    pred = model(categorical_inputs=cat, continuous_inputs=cont)
+
+    # loss = loss_fn(pred, targets.reshape(-1,3), weight, idx)
+    loss = loss_fn(pred, targets.reshape(-1,3))
+    loss.backward()
+    optimizer.step()
+    return loss, (pred, targets)
+
+# @register
+# def validation_default(model, loss_fn, sampler, device):
+#     with torch.no_grad():
+#         # run validation every x steps
+#         val_loss = []
+#         model.eval()
+#         predictions = []
+#         truth = []
+#         weights = []
+
+#         for uid, validation_batch_generator in sampler.get_dataset_batch_generators(batch_size=sampler.batch_size, device=device).items():
+#             dataset_losses = []
+#             for cont, cat, targets in validation_batch_generator:
+#                 val_pred = model(categorical_inputs=cat, continuous_inputs=cont)
+#                 # if torch.any(torch.isnan(val_pred)):
+#                 #     from IPython import embed; embed(header="string - 63 in train_utils.py ")
+#                 loss = loss_fn(val_pred, targets.reshape(-1, 3))
+
+#                 dataset_losses.append(loss)
+
+#                 predictions.append(torch.softmax(val_pred, dim=1).cpu())
+#                 truth.append(targets.cpu())
+#                 weights.append(torch.full(size=(val_pred.shape[0], 1), fill_value=sampler[uid].relative_weight).cpu())
+#             # create event based weight tensor for dataset
+
+#             average_val = sum(dataset_losses) / len(dataset_losses) * sampler[uid].relative_weight
+#             val_loss.append(average_val)
+
+#         final_validation_loss = sum(val_loss).cpu()#/ len(val_loss)
+#         model.train()
+
+#         truth = torch.concatenate(truth, dim=0)
+#         predictions = torch.concatenate(predictions, dim=0)
+#         weights = torch.flatten(torch.concatenate(weights, dim=0))
+#         return final_validation_loss, (predictions, truth, weights)
+
 
 @register
 def validation_default(model, loss_fn, sampler, device):
@@ -56,7 +105,7 @@ def validation_default(model, loss_fn, sampler, device):
         truth = []
         weights = []
 
-        for uid, validation_batch_generator in sampler.get_dataset_batch_generators(batch_size=sampler.batch_size, device=device).items():
+        for uid, validation_batch_generator in sampler.batch_generator(batch_size=sampler.batch_size, device=device).items():
             dataset_losses = []
             for cont, cat, tar in validation_batch_generator:
                 cat, cont, tar = cat, cont, tar
@@ -125,15 +174,15 @@ def log_metrics(tensorboard_inst, iteration_step, sampler_output, target_map, mo
     tensorboard_inst.log_figure(f"{mode} roc curve one vs rest", roc_fig, step=iteration_step)
 
     # TODO: metrics calculation
-    _metrics = metrics.calculate_metrics(
-        tar,
-        pred,
-        label=list(target_map.keys()),
-        weights=weights,
-    )
+    # _metrics = metrics.calculate_metrics(
+    #     tar,
+    #     pred,
+    #     label=list(target_map.keys()),
+    #     weights=weights,
+    # )
 
-    tensorboard_inst.log_precision(_metrics, step=iteration_step, mode=mode)
-    tensorboard_inst.log_sensitivity(_metrics, step=iteration_step, mode=mode)
+    # tensorboard_inst.log_precision(_metrics, step=iteration_step, mode=mode)
+    # tensorboard_inst.log_sensitivity(_metrics, step=iteration_step, mode=mode)
 
 training_fn = functions.get(f"training_{train_config.config['training_fn']}")
 validation_fn = functions.get(f"validation_{train_config.config['validation_fn']}")

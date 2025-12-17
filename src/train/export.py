@@ -2,7 +2,8 @@ import torch
 import os
 from pathlib import Path
 from models.create_model import AddActFnToModel
-
+import inspect
+from abc import abstractmethod
 
 def torch_export(model, dst_path, input_tensors):
     from pathlib import Path
@@ -40,9 +41,11 @@ def torch_export(model, dst_path, input_tensors):
     p = Path(f"{dst_path}").with_suffix(".pt2")
     torch.export.save(exp, p, pickle_protocol=4)
 
-def torch_export_v2(model, name, fold):
+def torch_export_v2(model, name, fold, base_dir=None, add_softmax=True):
     DEVICE=torch.device("cpu")
-    model = AddActFnToModel(model, "softmax")
+    if add_softmax:
+        model = AddActFnToModel(model, "softmax")
+
     model = model.to(DEVICE)
     model = model.eval()
     # create dummy features from shape
@@ -69,9 +72,60 @@ def torch_export_v2(model, name, fold):
         dynamic_shapes=dynamic_shapes,
     )
 
-    base_dir = os.environ["MODELS_DIR"]
+    if base_dir is None:
+        base_dir = os.environ["MODELS_DIR"]
+
     dst = (Path(base_dir) / f"{name}_fold{fold}").with_suffix(".pt2")
     torch.export.save(exp, dst, pickle_protocol=4)
+    return dst
+
+
+class TorchExport():
+    def __init__(self, model_inst, model_name, fold=0, device="cpu", save_dir=None):
+        self.device = torch.device(device)
+        self.model = model_inst
+        self.save_dir = save_dir
+        self.model_name = model_name
+        self.fold = fold
+
+    @abstractmethod
+    def _input(self):
+        """ Should return a tuple of tensors that can be used to run the model """
+        pass
+
+    def dst(self):
+        if self.save_dir is None:
+            save_dir = os.environ["MODELS_DIR"]
+        return (Path(save_dir) / f"{self.model_name}_fold{self.fold}").with_suffix(".pt2")
+
+    def export(self):
+        model = self.model.to(self.device)
+        model = model.eval()
+
+        forward_signature = list(inspect.signature(model.forward).parameters.keys())
+        _input = self._input()
+
+        dim = torch.export.Dim("batch")
+        dynamic_shapes = {forward_arg: {0: dim, 1: _inp_tensor.shape[-1]} for forward_arg, _inp_tensor in zip(forward_signature, _input)}
+
+        exp = torch.export.export(
+            model,
+            args=_input,
+            dynamic_shapes=dynamic_shapes,
+        )
+
+        torch.export.save(exp, self.dst(), pickle_protocol=4)
+        print(f"successfully export to {self.dst()}")
+
+class TorchExportFullModel(TorchExport):
+    def _input(self):
+        num_cat = len(model.categorical_features)
+        num_cont = len(model.continous_features)
+
+        categorical_input = torch.zeros(2, num_cat).to(torch.int32).to(self.device)
+        continuous_inputs = torch.zeros(2, num_cont).to(torch.float32).to(self.device)
+        return categorical_input, continuous_inputs
+
 
 def torch_save(model, name, fold):
     base_dir = os.environ["MODELS_DIR"]
@@ -88,6 +142,7 @@ def run_exported_tensor_model(pt2_path, cat, cont):
 if __name__ == "__main__":
     import pathlib
     import argparse
+    import os
 
     p = argparse.ArgumentParser(description="Export model to torch-export (.pt2) with dynamic batch dim")
     p.add_argument("--model_path", "-m", required=True, help="Path to the model file (file or checkpoint) to load")
@@ -95,8 +150,12 @@ if __name__ == "__main__":
 
     args = p.parse_args()
 
+    model_path = pathlib.Path(args.model_path)
+    # if given path is a only a name search for name in enviroment dir
+    if len(model_path.parts) == 1:
+        model_path = pathlib.Path(os.environ["MODELS_DIR"]).with_stem(args.model_path).with_suffix(".pt2")
+
     model = torch.load(args.model_path, weights_only=False)
     model.eval()
-    torch_export_v2(model, name=pathlib.Path(args.model_path).stem, fold=args.fold)
-
-    from IPython import embed; embed(header="string - 94 in export.py ")
+    torch_export_v2(model, name=str(model_path), fold=args.fold)
+    print("Done exporting")

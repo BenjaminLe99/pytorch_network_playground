@@ -62,16 +62,17 @@ def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
 
 # config of network
 model_building_config = {
-    "ref_phi_columns": ("res_dnn_pnet_vis_tau1", "res_dnn_pnet_vis_tau2"),
-    "rotate_columns": ("res_dnn_pnet_bjet1", "res_dnn_pnet_bjet2", "res_dnn_pnet_fatjet", "res_dnn_pnet_vis_tau1", "res_dnn_pnet_vis_tau2"),
-    "categorical_padding_value": None,
-    "continous_padding_value": None,
-    "nodes": 128,
+    "enable_rotation": False, # enbale rotiation layer based on two reference objects, TODO: this breaks export to torch script
+    "ref_phi_columns": ("res_dnn_pnet_vis_tau1", "res_dnn_pnet_vis_tau2"), # which columsn should be used to get rotation angle
+    "rotate_columns": ("res_dnn_pnet_bjet1", "res_dnn_pnet_bjet2", "res_dnn_pnet_fatjet", "res_dnn_pnet_vis_tau1", "res_dnn_pnet_vis_tau2"), # which columns should be rotated
+    "categorical_padding_value": None, # missing values in categorical inputs are replaced by this
+    "continous_padding_value": None, # missing values in continous inputs are replaced by this
+    "nodes": 128, # number of nodes in each linear layer of the dense blocks
     "activation_functions": "elu",
-    "skip_connection_init": 1,
-    "freeze_skip_connection": True,
+    "skip_connection_init": 1, # init value of the skip connection, 1 = exact copy
+    "freeze_skip_connection": True, # make skip connections static, non-learnable
     "batch_norm_eps" : 0.001, # marcel : 0.001
-    "LBN_M" : 10,
+    "LBN_M" : 10, # number of particles of the lbn network
 
 }
 
@@ -95,7 +96,8 @@ config = {
     "load_marcel_stats" : False,
     "load_marcel_weights" : False,
     "training_fn" : "default", # chooses the training function
-    "validation_fn" : "default"
+    "validation_fn" : "default",
+    "loss_fn" : "signal_efficiency",
 }
 
 scheduler_config = {
@@ -108,7 +110,6 @@ scheduler_config = {
 optimizer_config = {
     "apply_to": "weight",
     "decay_factor": 500,
-    "normalize": True,
+    "normalize": True, # add weight normalized
     "lr":1e-3,
-    # "lr":1e-6,
 }
