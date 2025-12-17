@@ -5,7 +5,7 @@ import torch
 from models import create_model
 from data.load_data import get_data
 from data.preprocessing import (
-    create_train_and_validation_sampler, get_batch_statistics, get_batch_statistics_from_sampler, split_k_fold_into_training_and_validation, test_sampler
+    create_train_or_validation_sampler, get_batch_statistics_from_sampler, split_k_fold_into_training_and_validation
     )
 from utils.logger import get_logger, TensorboardLogger
 from data.cache import hash_config
@@ -14,6 +14,8 @@ from mymodels.my_configs import (
     config, dataset_config, model_building_config, optimizer_config, target_map,
 )
 from train_utils import training, validation, log_metrics
+
+# my imports
 from mymodels.my_utils import init_weights_he_uniform, get_marcel_stats, save_marcels_weights
 from mymodels import recreate_simple
 
@@ -45,37 +47,60 @@ for current_fold in (config["train_folds"]):
         seed=config["seed"],
         train_ratio=config["train_ratio"],
     )
+
+    training_sampler = create_train_or_validation_sampler(
+        train_data,
+        target_map = target_map,
+        min_size=config["min_events_in_batch"],
+        batch_size=config["t_batch_size"],
+        train=True,
+        sample_ratio=config["sample_ratio"],
+    )
+    validation_sampler = create_train_or_validation_sampler(
+        validation_data,
+        target_map = target_map,
+        min_size=config["min_events_in_batch"],
+        batch_size=config["v_batch_size"],
+        train=False,
+        sample_ratio=config["sample_ratio"],
+    )
+
+    # share relative weight from training batch statistic to validation sampler
+    training_sampler.share_weights_between_sampler(validation_sampler)
+
     # get weighted mean and std of expected batch composition
     #model_building_config["mean"], model_building_config["std"] = get_batch_statistics(train_data, padding_value=-99999)
 
     # get marcels stats
     #get_marcel_stats(model_building_config)
 
-    training_sampler, validation_sampler = create_train_and_validation_sampler(
-        t_data = train_data,
-        v_data = validation_data,
-        t_batch_size = config["t_batch_size"],
-        v_batch_size = config["v_batch_size"],
-        target_map=target_map,
-        min_size=1,
-        sample_ratio=config["sample_ratio"]
+    model_building_config["mean"], model_building_config["std"] = get_batch_statistics_from_sampler(
+        training_sampler, 
+        padding_values=-99999, 
+        features=dataset_config["continous_features"]
     )
 
-    model_building_config["mean"], model_building_config["std"] = get_batch_statistics_from_sampler(training_sampler, padding_values=-99999, features=dataset_config["continous_features"])
-
     ### Model setup
-    model = recreate_simple.init_layers(dataset_config["continous_features"], dataset_config["categorical_features"], config=model_building_config)
-    from IPython import embed;embed(header=" string - 63 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/testdnn2.py")
+    model = recreate_simple.init_layers(dataset_config["continous_features"], 
+                                        dataset_config["categorical_features"], 
+                                        config=model_building_config
+    )
     #save_marcels_weights(model)
     
     model = model.to(DEVICE)
 
     # TODO: only linear models should contribute to weight decay
     # TODO : SAMW Optimizer
-    weight_decay_parameters = optimizer.prepare_weight_decay(model, optimizer_config)
+    weight_decay_parameters = optimizer.prepare_weight_decay(model, 
+                                                             optimizer_config
+    )
     #optimizer_inst = torch.optim.AdamW(model.parameters(), lr=optimizer_config["lr"], weight_decay=optimizer_config["decay_factor"])
-    optimizer_inst = torch.optim.AdamW(list(weight_decay_parameters.values()), lr=optimizer_config["lr"])
-    scheduler_inst = torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer_inst, gamma=optimizer_config["learning_rate_reduction_factor"])
+    optimizer_inst = torch.optim.AdamW(list(weight_decay_parameters.values()), 
+                                       lr=optimizer_config["lr"]
+    )
+    scheduler_inst = torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer_inst, 
+                                                            gamma=optimizer_config["learning_rate_reduction_factor"]
+    )
 
 
     # HINT: requires only logits, no softmax at end
@@ -173,8 +198,8 @@ for current_fold in (config["train_folds"]):
     torch.save(model.state_dict(), "/afs/desy.de/user/l/lebenjam/Master/neuralnetwork/mlmodels/model_dicts/my_model.pth")
 
     # TODO release DATA from previous RUN
-    from IPython import embed;embed(header=" string - 165 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/testdnn2.py")
     
+
     # save network
     import ml_save
     cont, cat, tar = training_sampler.sample_batch(device=CPU)

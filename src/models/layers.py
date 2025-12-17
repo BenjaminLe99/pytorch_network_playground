@@ -945,7 +945,7 @@ class LBN(torch.nn.Module):
 
         # create boost objects
         restframe_m = (restframe_vecs[..., E]**2 - restframe_p**2)**0.5  # (B, M)
-        gamma = restframe_vecs[..., E] / restframe_m  # (B, M)
+        gamma = restframe_vecs[..., E] / (self.eps + restframe_m)  # (B, M)
         beta = restframe_p / restframe_vecs[..., E]  # (B, M)
         beta_vecs = restframe_vecs[..., PX:] / restframe_vecs[..., E, None]  # (B, M, 3)
         n_vecs = beta_vecs / beta[..., None]  # (B, M, 3)

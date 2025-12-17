@@ -24,7 +24,7 @@ def add_prefix(string, prefix, ignore_code="_"):
         return prefix + string
 
 def input_features(debug=False, debug_length=3):
-    data_prefix = "res_dnn_pnet_"
+    data_prefix = "reg_dnn_moe_" #prod20: reg_dnn_moe_, prod14: res_dnn_pnet_
     categorical_features: list[str] = [
         "pair_type",
         # "_channel_id",

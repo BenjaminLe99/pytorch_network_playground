@@ -29,7 +29,7 @@ class DenseNetwork(torch.nn.Module):
         total_hidden = sum(hidden_nodes)
         self.last_linear = torch.nn.Linear(total_hidden, output_nodes)
 
-    def forward(self, categorical_inputs,continuous_inputs):
+    def forward(self, categorical_inputs, continuous_inputs):
         x = self.input_layer(categorical_inputs, continuous_inputs)
         # First hidden layer (normal connection)
         layers = [self.first_hidden(x)]
@@ -43,3 +43,24 @@ class DenseNetwork(torch.nn.Module):
         # Output sees all hidden layers concatenated
         final_input = torch.cat(layers, dim=1)
         return self.last_linear(final_input)  # raw logits (no activation) 
+    
+class AddActFnToModel(torch.nn.Module):
+    def __init__(self, model, act_fn, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.model = model
+        # self.categorical_features = model.categorical_features
+        # self.continous_features = model.continous_features
+
+        self.act_func = self._get_attr(torch.nn.modules.activation, act_fn)(dim=1)
+
+    def _get_attr(self, obj, attr):
+        for o in dir(obj):
+            if o.lower() == attr.lower():
+                return getattr(obj, o)
+        else:
+            raise AttributeError(f"Object has no attribute '{attr}'")
+
+    def forward(self, categorical_inputs, continuous_inputs):
+        x = self.model(categorical_inputs, continuous_inputs)
+        x = self.act_func(x)
+        return x

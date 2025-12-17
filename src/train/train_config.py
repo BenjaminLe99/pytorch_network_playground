@@ -4,18 +4,61 @@ from data.load_data import find_datasets
 ### data config
 # targets and inputs
 target_map = {"hh" : 0, "tt": 1, "dy": 2}
-continous_features, categorical_features = input_features(debug=False, debug_length=3)
-dataset_pattern = ["dy_*","tt_*", "hh_ggf_hbb_htt_kl0_kt1*","hh_ggf_hbb_htt_kl1_kt1*"]
-eras = ["22pre", "22post", "23pre", "23post"]
-datasets =  find_datasets(dataset_pattern, eras, "root", verbose=False)
-# changes in this dictionary will create a NEW hash of the data
-dataset_config = {
-    "continous_features" : continous_features,
-    "categorical_features": categorical_features,
-    "eras" : eras,
-    "datasets" : datasets,
-    "cuts" : None,
-}
+
+def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
+    dataset_pattern = []
+
+    if 'dy' in pattern_list:
+        dataset_pattern += ['dy_*'] #swap tt and dy in the brackets for debugging
+    if 'tt' in pattern_list:
+        dataset_pattern += ['tt_*']
+    if 'kl0' in pattern_list:
+        dataset_pattern += ['hh_ggf_hbb_htt_kl0_kt1*']
+    if 'kl1' in pattern_list:
+        dataset_pattern += ['hh_ggf_hbb_htt_kl1_kt1*']
+    if 'kl5' in pattern_list:
+        dataset_pattern += ['hh_ggf_hbb_htt_kl5*']
+    if 'kl2p45' in pattern_list:
+        dataset_pattern += ['hh_ggf_hbb_htt_kl2p45*']
+    if 'all' in pattern_list:
+        dataset_pattern = ["dy_*","tt_*","hh_ggf_hbb_htt_kl0_kt1*","hh_ggf_hbb_htt_kl1_kt1*","hh_ggf_hbb_htt_kl5*","hh_ggf_hbb_htt_kl2p45*"]
+
+    print(f"Starting training with datasets:{dataset_pattern}")
+
+
+    continous_features, categorical_features = input_features(debug=False, debug_length=3)
+    # dataset_pattern = ["dy_*","tt_*", 
+    #                 "hh_ggf_hbb_htt_kl0_kt1*",
+    #                 "hh_ggf_hbb_htt_kl1_kt1*",
+    #                 "hh_ggf_hbb_htt_kl5*",
+    #                 "hh_ggf_hbb_htt_kl2p45*"]
+
+    #eras = ["22pre", "22post", "23pre", "23post"]
+    eras = []
+    
+    if '22pre' in eras_list:
+        eras += ['22pre']
+    if '22post' in eras_list:
+        eras += ['22post']
+    if '23pre' in eras_list:
+        eras += ['23pre']
+    if '23post' in eras_list:
+        eras += ['23post']
+    if 'all' in eras_list:
+        eras = ["22pre", "22post", "23pre", "23post"]
+
+    print(f'Eras: {eras}')
+
+    datasets =  find_datasets(dataset_pattern, eras, "root", verbose=False)
+    # changes in this dictionary will create a NEW hash of the data
+    dataset_config = {
+        "continous_features" : continous_features,
+        "categorical_features": categorical_features,
+        "eras" : eras,
+        "datasets" : datasets,
+        "cuts" : None,
+    }
+    return dataset_config
 
 # config of network
 model_building_config = {
@@ -33,9 +76,9 @@ model_building_config = {
 }
 
 config = {
-    "max_train_iteration" : 60000,
+    "max_train_iteration" : 100000000,
     "verbose_interval" : 25,
-    "validation_interval" : 400,
+    "validation_interval" : 500,
     "gamma":0.5,
     "label_smoothing":0,
     "train_folds" : (0,),
@@ -46,8 +89,6 @@ config = {
     "t_batch_size" : 4096,
     "sample_ratio" : {"dy": 1/3, "tt": 1/3, "hh": 1/3},
     "min_events_in_batch": 1,
-
-    "save_model_name" : "model_nr5_lbn_asam",
     "early_stopping_patience" : 10, # marcel : 10
     "early_stopping_min_delta" : 0, # marcel : 0
     "get_batch_statistic_return_dummy" : False,
@@ -59,7 +100,7 @@ config = {
 
 scheduler_config = {
     "patience" : 10, # marcel : 10
-    "min_delta" : 0.01, # marcel : 0
+    "min_delta" : 0, # marcel : 0
     "threshold_mode" : "abs", # marcel : abs
     "factor" : 0.5,
 }

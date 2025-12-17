@@ -95,6 +95,9 @@ def log_metrics(tensorboard_inst, iteration_step, sampler_output, target_map, mo
 
     pred, tar, weights = sampler_output
 
+    if float(torch.sum(torch.isnan(pred)).detach()) > 0:
+        from IPython import embed;embed(header=" string - 98 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/train_utils.py")
+
     # network prediction plot
     pred_fig, pred_ax = plotting.network_predictions(
         tar,
@@ -132,5 +135,5 @@ def log_metrics(tensorboard_inst, iteration_step, sampler_output, target_map, mo
     tensorboard_inst.log_precision(_metrics, step=iteration_step, mode=mode)
     tensorboard_inst.log_sensitivity(_metrics, step=iteration_step, mode=mode)
 
-training_fn = functions.get(f"training_{train_config.config["training_fn"]}")
-validation_fn = functions.get(f"validation_{train_config.config["validation_fn"]}")
+training_fn = functions.get(f"training_{train_config.config['training_fn']}")
+validation_fn = functions.get(f"validation_{train_config.config['validation_fn']}")

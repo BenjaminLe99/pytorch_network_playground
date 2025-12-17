@@ -63,13 +63,13 @@ def normalized_weight_decay(
     return {"params": no_weight_decay, "weight_decay": 0.0}, {"params": with_weight_decay, "weight_decay": decay_factor}
 
 embedding_expected_inputs = {
-    "res_dnn_pnet_pair_type": [0, 1, 2],  # see mapping below
-    "res_dnn_pnet_dm1": [-1, 0, 1, 10, 11],  # -1 for e/mu
-    "res_dnn_pnet_dm2": [0, 1, 10, 11],
-    "res_dnn_pnet_vis_tau1_charge": [-1, 1],
-    "res_dnn_pnet_vis_tau2_charge": [-1, 1],
-    "res_dnn_pnet_has_fatjet": [0, 1],  # whether a selected fatjet is present
-    "res_dnn_pnet_has_jet_pair": [0, 1],  # whether two or more jets are present
+    "reg_dnn_moe_pair_type": [0, 1, 2],  # see mapping below
+    "reg_dnn_moe_dm1": [-1, 0, 1, 10, 11],  # -1 for e/mu
+    "reg_dnn_moe_dm2": [0, 1, 10, 11],
+    "reg_dnn_moe_vis_tau1_charge": [-1, 1],
+    "reg_dnn_moe_vis_tau2_charge": [-1, 1],
+    "reg_dnn_moe_has_fatjet": [0, 1],  # whether a selected fatjet is present
+    "reg_dnn_moe_has_jet_pair": [0, 1],  # whether two or more jets are present
     # 0: 2016APV, 1: 2016, 2: 2017, 3: 2018, 4: 2022preEE, 5: 2022postEE, 6: 2023pre, 7: 2023post
     # "res_dnn_pnet_year_flag": [0, 1, 2, 3, 4, 5, 6, 7],
     "channel_id": [1, 2, 3],
