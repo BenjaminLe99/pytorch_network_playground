@@ -9,11 +9,12 @@ def torch_export(model, dst_path, input_tensors):
     from models.create_model import AddActFnToModel
     model = AddActFnToModel(model, "softmax")
     model = model.eval()
+    # model = model.to(torch.device("cpu"))
 
     categorical_input, continuous_inputs = input_tensors
 
-    continuous_inputs = continuous_inputs.to(torch.float32)
-    categorical_input = categorical_input.to(torch.int32)
+    continuous_inputs = continuous_inputs.to(torch.float32)#.to(torch.device("cpu"))
+    categorical_input = categorical_input.to(torch.int32)#.to(torch.device("cpu"))
 
     # batch size 1 is an edge case and overwrites dynamic batch size, thus, inflate input to prevent this
     if categorical_input.shape[0] == 1:
@@ -98,5 +99,4 @@ if __name__ == "__main__":
     model = torch.load(args.model_path, weights_only=False)
     model.eval()
     torch_export_v2(model, name=pathlib.Path(args.model_path).stem, fold=args.fold)
-
-    from IPython import embed; embed(header="string - 94 in export.py ")
+    print("model exported")

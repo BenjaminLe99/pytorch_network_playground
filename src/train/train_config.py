@@ -2,9 +2,6 @@ from data.features import input_features
 from data.load_data import find_datasets
 
 ### data config
-# targets and inputs
-target_map = {"hh" : 0, "tt": 1, "dy": 2}
-
 def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
     dataset_pattern = []
 
@@ -22,18 +19,9 @@ def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
         dataset_pattern += ['hh_ggf_hbb_htt_kl2p45*']
     if 'all' in pattern_list:
         dataset_pattern = ["dy_*","tt_*","hh_ggf_hbb_htt_kl0_kt1*","hh_ggf_hbb_htt_kl1_kt1*","hh_ggf_hbb_htt_kl5*","hh_ggf_hbb_htt_kl2p45*"]
-
     print(f"Starting training with datasets:{dataset_pattern}")
 
-
     continous_features, categorical_features = input_features(debug=False, debug_length=3)
-    # dataset_pattern = ["dy_*","tt_*", 
-    #                 "hh_ggf_hbb_htt_kl0_kt1*",
-    #                 "hh_ggf_hbb_htt_kl1_kt1*",
-    #                 "hh_ggf_hbb_htt_kl5*",
-    #                 "hh_ggf_hbb_htt_kl2p45*"]
-
-    #eras = ["22pre", "22post", "23pre", "23post"]
     eras = []
     
     if '22pre' in eras_list:
@@ -50,13 +38,26 @@ def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
     print(f'Eras: {eras}')
 
     datasets =  find_datasets(dataset_pattern, eras, "root", verbose=False)
+    
+    # hh case for going back and comparing
+    target_list = []
+    if 'hh' not in pattern_list:
+        target_list = pattern_list
+    else:
+        target_list = ['hh','tt','dy']
+
+    # define the target map depending on what kappa lambda datasets you use
+    target_map = {cls: idx for idx, cls in enumerate(target_list)}
+    print(f"target map: {target_map}")
+    
     # changes in this dictionary will create a NEW hash of the data
     dataset_config = {
         "continous_features" : continous_features,
         "categorical_features": categorical_features,
         "eras" : eras,
         "datasets" : datasets,
-        "cuts" : None,
+        "cuts" : "(vbf_dnn_moe_hh_vbf < 0.5)",
+        "target_map": target_map,
     }
     return dataset_config
 
@@ -85,9 +86,8 @@ config = {
     "k_fold" : 5,
     "seed" : 1,
     "train_ratio" : 0.75,
-    "v_batch_size" : 4096 * 8,
-    "t_batch_size" : 4096,
-    "sample_ratio" : {"dy": 1/3, "tt": 1/3, "hh": 1/3},
+    "v_batch_size" : 2**17, # old batchsize: 4096*8 = 2**16
+    "t_batch_size" : 2**14, # old batchsize: 4096 = 2**13
     "min_events_in_batch": 1,
     "early_stopping_patience" : 10, # marcel : 10
     "early_stopping_min_delta" : 0, # marcel : 0
@@ -99,7 +99,7 @@ config = {
 }
 
 scheduler_config = {
-    "patience" : 10, # marcel : 10
+    "patience" : 10 - 1, # marcel : 10, starts counting from 0
     "min_delta" : 0, # marcel : 0
     "threshold_mode" : "abs", # marcel : abs
     "factor" : 0.5,
@@ -109,6 +109,12 @@ optimizer_config = {
     "apply_to": "weight",
     "decay_factor": 500,
     "normalize": True,
-    "lr":1e-3,
-    # "lr":1e-6,
 }
+
+extra_losses = None
+# extra_losses = {
+#     "cross_entropy": {
+#         "mode": "cross_entropy",
+#         "content": None
+#     }
+# }

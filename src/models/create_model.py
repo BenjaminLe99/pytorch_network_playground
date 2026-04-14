@@ -190,8 +190,9 @@ class BNetDenseNet(torch.nn.Module):
         return x
 
 class BNetLBNDenseNet(torch.nn.Module):
-    def __init__(self, continous_features, categorical_features, config, *args, **kwargs):
+    def __init__(self, continous_features, categorical_features, target_map, config, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.classes = len(target_map)
         self.init_layers(config=config, continous_features=continous_features, categorical_features=categorical_features)
         self.categorical_features = categorical_features
         self.continous_features = continous_features
@@ -247,7 +248,6 @@ class BNetLBNDenseNet(torch.nn.Module):
         self.lbn = LBN_DNN(
             continous_features = continous_features,
             M  = config["LBN_M"],
-            N  = 5,
             weight_init_scale = 1.0,
             clip_weights = False,
             eps = 1.0e-5,
@@ -267,7 +267,8 @@ class BNetLBNDenseNet(torch.nn.Module):
         self.dense_block_3 = DenseNetBlock(input_nodes = self.dense_block_2.output_dim, output_nodes = int((config["nodes"])), **dense_config)
         self.dense_block_4 = DenseNetBlock(input_nodes = self.dense_block_3.output_dim, output_nodes = int((config["nodes"])), **dense_config)
         self.dense_block_5 = DenseNetBlock(input_nodes = self.dense_block_4.output_dim, output_nodes = int((config["nodes"])), **dense_config)
-        self.last_linear = torch.nn.Linear(self.dense_block_5.output_dim, 3)
+        # self.linear50 = DenseBlock(input_nodes = self.dense_block_5.output_dim, output_nodes = 50, activation_functions=config["activation_functions"], eps=eps, normalize=normalize)
+        self.last_linear = torch.nn.Linear(self.dense_block_5.output_dim, self.classes)
 
     def forward(self, categorical_inputs, continuous_inputs):
         # preprocessing
@@ -284,6 +285,7 @@ class BNetLBNDenseNet(torch.nn.Module):
         x = self.dense_block_3(x)
         x = self.dense_block_4(x)
         x = self.dense_block_5(x)
+        # y = self.linear50(x)
         x = self.last_linear(x)
         return x
 

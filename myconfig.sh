@@ -2,10 +2,10 @@ export STORE_DIR=/data/dust/user/lebenjam/Master/dnn
 export SOFTWARE_DIR=${STORE_DIR}/software
 export TRAINING_DIR=${STORE_DIR}/training/results
 export CACHE_DIR=${STORE_DIR}/cache
-export MODELS_DIR=/afs/desy.de/user/l/lebenjam/Master/neuralnetwork/mlmodels/lbns
-#export INPUT_DATA_DIR="/data/dust/user/riegerma/hh2bbtautau/run3_training_data/prod14"
-export INPUT_DATA_DIR="/data/dust/user/riegerma/hh2bbtautau/run3_training_data/prod20"
+export MODELS_DIR=/afs/desy.de/user/l/lebenjam/Master/neuralnetwork/mlmodels/weight_matrix
+# export INPUT_DATA_DIR="/data/dust/user/riegerma/hh2bbtautau/run3_training_data/prod14"
+export INPUT_DATA_DIR="/data/dust/user/riegerma/hh2bbtautau/run3_training_data/prod20_vbf"
 export ML_ENV="ml_pytorch"
-export TENSORBOARD_DIR=${STORE_DIR}/tensorboard
+export TENSORBOARD_DIR=${STORE_DIR}/tensorboard/
 export PYTHONPATH=$(pwd)/src
 echo "config loaded."

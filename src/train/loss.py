@@ -153,3 +153,174 @@ class FocalLoss(torch.nn.Module):
         elif self.reduction == 'sum':
             return loss.sum()
         return loss
+
+class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
+    """
+    Generalized Cross-Entropy loss with additional false class penalties.
+    Weights are a Tensor of shape (num_classes, num_classes), representing the weights of loss penalties for a given prediction.
+    Diagonal entries give weights to standard cross-entropy loss terms log(p).
+    Off-diagonal entries give weights to False-class log loss terms log(1-p), adding additional penalties for high false class prediction scores.
+    Takes logits as inputs.
+    """
+    def __init__(self, weight_matrix_A, weight_matrix_B, loss_components_dict=None, device=None, **kwargs):
+        super(WeightedFalseClassPenaltyLogLoss, self).__init__()
+        self.weight_matrix_A = weight_matrix_A
+        self.weight_matrix_B = weight_matrix_B
+        self.loss_components_dict = loss_components_dict # dict containing various combinations of loss components of the weight matrix one wants to calculate in addition.
+        self.device = device
+
+    def forward(self, logits, targets, **kwargs):
+        # calculate main loss
+        logits = self.align_logits_to_targets(logits, targets, **kwargs)
+        loss = self.calculate_loss(logits, targets, **kwargs)
+
+        # calculate extra losses that dont contribute to training
+        if self.loss_components_dict is not None:
+            loss_dict = self.get_weight_matrix_loss_components(logits, targets)
+            return loss, loss_dict
+
+        return (loss,)
+    
+    def align_logits_to_targets(self, logits, targets, **kwargs):
+
+        if logits.shape[1] == targets.shape[1]:
+            return logits
+        
+        start_idx = kwargs.get('start_idx')
+        end_idx = kwargs.get('end_idx')
+        
+        group_logit = torch.logsumexp(logits[:, start_idx:end_idx], dim=1, keepdim=True)
+    
+        # Stitch the logits back together
+        return torch.cat([logits[:,:start_idx],group_logit], dim=1)   
+    
+    def calculate_loss(self, logits, targets, **kwargs):
+        
+        start_idx = kwargs.get('start_idx')
+
+        if start_idx:
+            weight_matrix = self.weight_matrix_A
+            self.weight_matrix = weight_matrix
+        else:
+            weight_matrix = self.weight_matrix_B
+            self.weight_matrix = weight_matrix
+
+        # calculate log losses
+        true_class_log_prob = self.true_class_log_probabilities(logits)
+        false_class_log_prob = self.false_class_log_probabilities(logits)
+
+        # if torch.isnan(true_class_log_prob).any():
+        #     print("NaN detected in true_class_log_prob!")   
+        # if torch.isinf(true_class_log_prob).any():
+        #     print("Inf detected in true_class_log_prob!")
+
+        # if torch.isnan(false_class_log_prob).any():
+        #     print("NaN detected in false_class_log_prob!")
+        # if torch.isinf(false_class_log_prob).any():
+        #     print("Inf detected in false_class_log_prob!")
+
+        # pick out the row of the class
+        weight_rows = targets @ weight_matrix 
+
+        # calculate loss of target class
+        true_class_loss = (targets * weight_rows * true_class_log_prob).sum(dim=1)  # batch of only target loss
+
+        # calculate loss of false classes
+        false_classes_mask = 1 - targets  # 1 where not true class
+        false_class_loss = (false_classes_mask * weight_rows * false_class_log_prob).sum(dim=1) # batch of false classes loss
+
+        # add loss penalties
+        loss_per_sample = -(true_class_loss + false_class_loss)
+        loss = loss_per_sample.mean()
+        return loss
+    
+    def get_weight_matrix_loss_components(self, logits, targets, **kwargs):
+        """
+        Method to compute components of the loss. Ex.: for weight matrix:
+        [[1,2,3], [4,5,6], [7,8,9]]
+        return the first row contribution, second row contribution, etc.
+        """
+
+        def weight_matrix_component_selector(mode, idx=None):
+            """
+            Selects a part of the weight matrix and returns a new matrix of the same shape
+            with only the selected entries preserved; all others are zero.
+            """
+            selected_components = torch.zeros_like(self.weight_matrix)
+            selected_components = selected_components.to(self.device)
+
+            if mode == "row":
+                selected_components[idx, :] = self.weight_matrix[idx, :]
+
+            elif mode == "column":
+                selected_components[:, idx] = self.weight_matrix[:, idx]
+
+            elif mode == "element":
+                i, j = idx
+                selected_components[i, j] = self.weight_matrix[i, j]
+
+            elif mode == "weighted_cross_entropy":
+                diag_vals = self.weight_matrix.diagonal()
+                selected_components.fill_diagonal_(diag_vals)
+
+            elif mode == "submatrix":
+                r1, r2, c1, c2 = idx
+                selected_components[r1:r2, c1:c2] = self.weight_matrix[r1:r2, c1:c2]
+
+            elif mode == "cross_entropy":
+                n, m = self.weight_matrix.shape
+                selected_components = torch.eye(n,m)
+            else:
+                raise ValueError("Invalid mode")
+
+            return selected_components
+
+        non_contributing_losses = {}
+        start_idx = kwargs.get('start_idx')
+        end_idx = kwargs.get('end_idx')
+
+        if start_idx is not None or end_idx is not None:
+            matrix_type = 'group'
+        else:
+            matrix_type = 'kl'
+
+        for key, value in self.loss_components_dict[matrix_type].items():
+            reduced_weight_matrix = weight_matrix_component_selector(value['mode'], value['content'])
+            reduced_weight_matrix = reduced_weight_matrix.to(self.device)
+            non_contributing_losses[key] = self.calculate_loss(logits, targets, reduced_weight_matrix)
+
+        return non_contributing_losses
+
+    def true_class_log_probabilities(self, logits):
+        """
+        Computes a numerically safe, equivalent form of log(p) using torch.nn.functional.log_softmax
+        """
+        true_class_log_probability = torch.log_softmax(logits, dim=1)
+
+        return true_class_log_probability
+
+    def false_class_log_probabilities(self, logits):
+
+        probabilities = torch.nn.functional.softmax(logits, dim=1) # output probabilities
+        false_class_log_probability = torch.log(1 - probabilities + 1e-10) # log probability of false classes
+
+        return false_class_log_probability
+    
+    # old hardcoded loss for reference
+    # probabilities = torch.nn.functional.softmax(pred, dim=1) # output probabilities
+    # true_class_log_probabilities = torch.log(probabilities + 1e-12) # log probability of true class
+    # false_class_log_probabilities = torch.log(1 - probabilities + 1e-12) # log probability of false classes
+
+    # # pick out the row of the class
+    # weight_rows = targets @ weight_matrix 
+
+    # # calculate loss of target class
+    # true_class_loss = (targets * weight_rows * true_class_log_probabilities).sum(dim=1)  # batch of only target loss
+
+    # # calculate loss of false classes
+    # false_classes_mask = 1 - targets  # 1 where not true class
+    # false_class_loss = (false_classes_mask * weight_rows * false_class_log_probabilities).sum(dim=1) # batch of false classes loss
+
+    # # add loss penalties
+    # loss_per_sample = -(true_class_loss + false_class_loss) 
+    # loss = loss_per_sample.mean() # reduce to scalar

@@ -114,10 +114,10 @@ class DatasetSampler(t_data.Sampler):
         self,
         datasets_inst=None,
         batch_size=1,
-        sample_ratio={"dy": 0.25, "tt": 0.25, "hh": 0.5},
+        sample_ratio=None,
         min_size = None,
         ):
-        self.total_weight = {"dy":0, "tt":0, "hh":0}
+        self.total_weight = {key: 0 for key in sample_ratio}
         self.dataset_inst = defaultdict(dict)  # {dataset_type: {process_id: dataset}}
         self.batch_size = torch.tensor([batch_size], dtype=torch.int32)
         if datasets_inst is not None:
@@ -250,13 +250,15 @@ class DatasetSampler(t_data.Sampler):
 
         # TODO BETTER SCHEME
         # remove remaining from biggest sample or add more to biggest sample
-        if very_last_remaining <= -1:
-            floored_sizes[indices_above_threshold[-1]] -= very_last_remaining
-        elif very_last_remaining >= 1:
-            floored_sizes[indices_above_threshold[-1]] -= very_last_remaining
-        elif very_last_remaining != 0:
-            from IPython import embed; embed(header=f"{floored_sizes.sum()} but should be {sub_batch_size}")
-            raise ValueError(f"Resampling failed: Created batch size of size: {floored_sizes.sum()} but should be {sub_batch_size}")
+        floored_sizes[indices_above_threshold[0]] -= very_last_remaining
+        
+        # if very_last_remaining <= -1:
+        #     floored_sizes[indices_above_threshold[-1]] -= very_last_remaining
+        # elif very_last_remaining >= 1:
+        #     floored_sizes[indices_above_threshold[-1]] -= very_last_remaining
+        # elif very_last_remaining != 0:
+        #     from IPython import embed; embed(header=f"{floored_sizes.sum()} but should be {sub_batch_size}")
+        #     raise ValueError(f"Resampling failed: Created batch size of size: {floored_sizes.sum()} but should be {sub_batch_size}")
 
         # store batch size per phase space in dataset
         if not dry:

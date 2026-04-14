@@ -36,8 +36,10 @@ class ColoredFormatter(logging.Formatter):
         return message
 
 class TensorboardLogger():
-    def __init__(self, name=None):
+    def __init__(self, name=None, model_name=None, destination=None):
         self.hash = name.stem
+        self.name = model_name
+        self.destination = destination
         self.path = self.logger_path()
         self.writer = self.create_tensorboard_writer(log_dir=self.path)
 
@@ -75,8 +77,8 @@ class TensorboardLogger():
     def logger_path(self):
         from time import localtime, strftime
         t = strftime("%Y_%m_%d-%H_%M_%S", localtime())
-        new_stem = f"{t}-{self.hash}"
-        logger_path = self.log_dir / new_stem
+        new_stem = f"{t}-{self.name}-{self.hash}"
+        logger_path = self.log_dir / self.destination / new_stem
         return logger_path
 
     def create_tensorboard_writer(self, config=None, log_dir=None):

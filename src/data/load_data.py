@@ -165,7 +165,7 @@ def get_loader(file_type: str, **kwargs):
         #    raise ValueError(f"Unknown file type: {file_type}")
 
 
-def load_data(datasets, file_type: str="root", columns: Union[list[str],str, None]=None):
+def load_data(datasets, cuts, target_map, file_type: str="root", columns: Union[list[str],str, None]=None):
     """
     Loads data with given *file_type* in given a *dataset_pattern* and *year_pattern*. If only certain columns are needed, they can be specified in *columns*.
     The data sorted by year and dataset name is returned as a nested dictionary in awkward format.
@@ -199,9 +199,19 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
             events = loader(files, **config)
             p_arrays = sort_by_process_id(events)
             for pid, p_array in p_arrays:
-                uid = (dataset[:2],pid)
-                if uid not in data:
-                    data[uid] = []
+                if 'hh' in target_map:
+                    uid = (dataset[:2],pid)
+                    if uid not in data:
+                        data[uid] = []
+                else:
+                    if pid not in [21114,21101,21121,21120]:
+                        uid = (dataset[:2],pid)
+                        if uid not in data:
+                            data[uid] = []
+                    else:
+                        uid = (dataset[15:18],pid)
+                        if uid not in data:
+                            data[uid] = []
                 data[uid].append(p_array)
                 logger.debug(f"{dataset} | PID: {pid} | {len(p_array)}")
         return data
@@ -217,7 +227,7 @@ def load_data(datasets, file_type: str="root", columns: Union[list[str],str, Non
             concat = np.concatenate(arrays, axis=0)
             data[uid] = concat
         return data
-    loader, config = get_loader(file_type, columns=list(columns))
+    loader, config = get_loader(file_type, columns=list(columns), cuts = cuts)
     data = load_data_per_process_id(loader, datasets, config)
     data = merge_per_pid(data)
     return data
@@ -236,6 +246,8 @@ def get_data(config, _save_cache = True, overwrite=False):
         # load the data in {pid : awkward}
         events = load_data(
             config["datasets"],
+            config["cuts"],
+            target_map=config["target_map"],
             file_type = "root",
             columns = cont_feat + cat_feat
         )

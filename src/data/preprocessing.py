@@ -309,17 +309,19 @@ def split_k_fold_into_training_and_validation(events_dict, c_fold, k_fold, seed,
                 dictionary.pop(uid)
     return train, valid
 
-def create_train_or_validation_sampler(events, target_map, batch_size, min_size=1, train=True, sample_ratio={"dy": 0.25, "tt": 0.25, "hh": 0.5}):
+def create_train_or_validation_sampler(events, target_map, sample_ratio, batch_size, min_size=1, train=True):
     # extract data from events and wrap into Datasets
     if not events:
         logger.warning(f"Sampler is not created due to feeding empty events")
         return None
+    
+    if len(sample_ratio) != len(target_map):
+        raise ValueError("sample ratio must have the same structure as target map")
 
     DatasetManager = DatasetSampler(None, batch_size=batch_size, min_size=min_size, sample_ratio=sample_ratio)
     for uid in list(events.keys()):
         (dataset_type, process_id) = uid
         arrays = events.pop(uid)
-
         # create target tensor from uid
         num_events = len(arrays["continous"])
         target_value = target_map[dataset_type]
@@ -340,6 +342,14 @@ def create_train_or_validation_sampler(events, target_map, batch_size, min_size=
     if train:
         for ds_type in DatasetManager.keys:
             DatasetManager.calculate_sample_size(dataset_type=ds_type)
+
+        batch_sizes = {}
+        for key, value in DatasetManager.dataset_inst.items():
+            batch_sizes[key] = []
+            for _, value2 in value.items():
+                batch_sizes[key].append(value2.sample_size)
+            batch_sizes[key] = sum(batch_sizes[key])
+        print(f"training batch splits: {batch_sizes}")
     return DatasetManager
 
 def test_sampler(events, target_map, batch_size, min_size=1, train=True):

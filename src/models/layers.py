@@ -19,6 +19,7 @@ from utils.utils import EMPTY_INT, EMPTY_FLOAT
 
 from typing import Sequence
 import copy
+import functools
 
 import torch
 
@@ -813,6 +814,214 @@ class AggregationLayer(torch.nn.Module):
     def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
         return self.aggregation_fn(x)
 
+# class LBN(torch.nn.Module):
+#     """
+#     Torch implementation of the LBN (Lorentz Boosted Network) feature extractor.
+#     For details and nomenclature see https://arxiv.org/pdf/1812.09722.
+#     """
+
+#     KNOWN_FEATURES = [
+#         "e", "px", "py", "pz",
+#         "pt", "eta", "phi", "m",
+#         "pair_cos", "pair_dr",
+#     ]
+
+#     DEFAULT_FEATURES = ["e", "pt", "eta", "phi", "m", "pair_cos"]
+
+#     def __init__(
+#         self,
+#         N: int,
+#         M: int,
+#         *,
+#         features: Sequence[str] | None = None,
+#         weight_init_scale: float | int = 1.0,
+#         clip_weights: bool = False,
+#         eps: float = 1.0e-5,
+#     ) -> None:
+#         super().__init__()
+
+
+#         # validate features
+#         if features is None:
+#             features = self.DEFAULT_FEATURES
+#         for f in features:
+#             if f not in self.KNOWN_FEATURES:
+#                 raise ValueError(f"unknown feature '{f}', known features are: {self.KNOWN_FEATURES}")
+
+#         # store settings
+#         self.N = N
+#         self.M = M
+#         self.features = list(features)
+#         self.weight_init_scale = weight_init_scale
+#         self.clip_weights = clip_weights
+#         self.eps = eps
+
+#         # constants
+#         self.register_buffer("I4", torch.eye(4, dtype=torch.float32))  # (4, 4)
+#         self.register_buffer("U", torch.tensor([[-1, 0, 0, 0], *(3 * [[0, -1, -1, -1]])], dtype=torch.float32))
+#         self.register_buffer("U1", self.U + 1)
+#         self.register_buffer(
+#             "lower_tril_indices",
+#             torch.arange(M**2).reshape((M, M))[torch.tril(torch.ones(M, M, dtype=torch.bool), -1)],
+#         )
+
+#         # randomly initialized weights for projections
+#         self.particle_w = torch.nn.Parameter(torch.rand(N, M) * weight_init_scale)
+#         self.restframe_w = torch.nn.Parameter(torch.rand(N, M) * weight_init_scale)
+
+#     @property
+#     def out_features(self) -> int:
+#         # determine number of pair-wise feature projections
+#         n_pair = sum(1 for f in self.features if f.startswith("pair_"))
+
+#         # compute output dimension
+#         n = (
+#             (
+#             len(self.features) - n_pair) * self.M +
+#             n_pair * (self.M**2 - self.M) // 2
+#         )
+#         return n
+
+#     def ndim(self):
+#         # dim normal features: m * 4
+#         non_pair_features_dim = len([f for f in self.features if "pair" not in f]) * self.M
+
+#         # dim pair-wise features is MxM Matrix, which diagonal = 0, and symmetric: (M^2 - M)/2
+#         pair_features_dim = len([f for f in self.features if "pair" in f]) * ((self.M**2 - self.M) / 2)
+#         num = int(non_pair_features_dim + pair_features_dim)
+#         return num
+
+#     def __repr__(self) -> str:
+#         params = {
+#             "N": self.N,
+#             "M": self.M,
+#             "features": ",".join(self.features),
+#             "clip": self.clip_weights,
+#         }
+#         params_str = ", ".join(f"{k}={v}" for k, v in params.items())
+#         return f"{self.__class__.__name__}({params_str}, {hex(id(self))})"
+
+#     def update_boosted_vectors(self, boosted_vecs: torch.Tensor) -> torch.Tensor:
+#         return boosted_vecs
+
+#     def forward(self, input_vecs, debug=False) -> torch.Tensor:
+#         if debug:
+#             from IPython import embed; embed(header="DEBUGGING LBN - 895 in layers.py ")
+#         # e, px, py, pz: (B, N)
+#         E, PX, PY, PZ = range(4)
+
+#         # optionally clip weights to prevent them going negative
+#         particle_w = self.particle_w
+#         restframe_w = self.restframe_w
+#         if self.clip_weights:
+#             particle_w = torch.clamp(particle_w, min=0.0)
+#             restframe_w = torch.clamp(restframe_w, min=0.0)
+
+#         # create combinations
+#         particle_vecs = torch.matmul(input_vecs, particle_w)  # (B, 4, M)
+#         restframe_vecs = torch.matmul(input_vecs, restframe_w)  # (B, 4, M)
+#         # transpose to (B, M, 4)
+#         particle_vecs = particle_vecs.permute(0, 2, 1)
+#         restframe_vecs = restframe_vecs.permute(0, 2, 1)
+
+#         # regularize vectors such that e > p
+#         particle_p = torch.sum(particle_vecs[..., PX:]**2, dim=-1)**0.5  # (B, M)
+#         new_particle_E = torch.maximum(particle_vecs[..., E], particle_p + self.eps)
+#         particle_vecs = torch.stack(
+#             [new_particle_E, particle_vecs[..., PX], particle_vecs[..., PY], particle_vecs[..., PZ]],
+#             dim=-1,
+#         )
+
+#         restframe_p = torch.sum(restframe_vecs[..., PX:]**2, dim=-1)**0.5  # (B, M)
+#         new_restframe_E = torch.maximum(restframe_vecs[..., E], restframe_p + self.eps)
+#         restframe_vecs = torch.stack(
+#             [new_restframe_E, restframe_vecs[..., PX], restframe_vecs[..., PY], restframe_vecs[..., PZ]],
+#             dim=-1,
+#         )
+
+#         # create boost objects
+#         restframe_m = torch.sqrt(torch.clamp(restframe_vecs[..., E]**2 - restframe_p**2, min=self.eps))  # (B, M)
+#         gamma = restframe_vecs[..., E] / (restframe_m + self.eps)  # (B, M)
+#         beta = restframe_p / (restframe_vecs[..., E] + self.eps)  # (B, M)
+#         beta_vecs = restframe_vecs[..., PX:] / (restframe_vecs[..., E, None] + self.eps)  # (B, M, 3)
+#         n_vecs = beta_vecs / (beta[..., None] + self.eps)  # (B, M, 3)
+#         e_vecs = torch.cat([torch.ones_like(n_vecs[..., :1]), -n_vecs], dim=-1)  # (B, M, 4)
+
+#         # build Lambda
+#         Lambda = self.I4 + (
+#             (self.U + gamma[..., None, None]) *
+#             (self.U1 * beta[..., None, None] - self.U) *
+#             (e_vecs[..., None] * e_vecs[..., None, :])
+#         )  # (B, M, 4, 4)
+
+#         # apply boosting
+#         boosted_vecs = (Lambda @ particle_vecs[..., None])[..., 0]
+
+#         # hook to update boosted vectors if desired
+#         boosted_vecs = self.update_boosted_vectors(boosted_vecs)
+
+#         # cached feature provision
+#         cache = {}
+#         def get(feature: str) -> torch.Tensor:
+#             # check cache first
+#             if feature in cache:
+#                 return cache[feature]
+#             # live feature access
+#             if feature == "e":
+#                 f = boosted_vecs[..., E]
+#             elif feature == "px":
+#                 f = boosted_vecs[..., PX]
+#             elif feature == "py":
+#                 f = boosted_vecs[..., PY]
+#             elif feature == "pz":
+#                 f = boosted_vecs[..., PZ]
+#             # cached  access
+#             elif feature == "pt2":
+#                 f = get("px")**2 + get("py")**2
+#             elif feature == "pt":
+#                 f = get("pt2")**0.5
+#             elif feature == "p2":
+#                 f = get("pt2") + get("pz")**2
+#             elif feature == "p":
+#                 f = get("p2")**0.5
+#             elif feature == "eta":
+#                 ratio = torch.atanh(torch.clamp(get("pz") / (get("p") + self.eps), min=-1 + self.eps, max=1 - self.eps))
+#                 f = torch.atanh(ratio)
+#             elif feature == "phi":
+#                 f = torch.atan2(get("py"), get("px"))
+#             elif feature == "m":
+#                 f = torch.sqrt(torch.clamp(torch.maximum(get("e")**2, get("p2") - get("p")), min=self.eps))
+#             elif feature == "pair_cos":
+#                 boosted_pvecs = boosted_vecs[..., PX:]  # (B, M, 3)
+#                 boosted_p = get("p")
+#                 f = ((boosted_pvecs @ boosted_pvecs.transpose(1, 2)) / ((boosted_p[..., None] + self.eps) @ (boosted_p[:, None, :] + self.eps))).flatten(start_dim=1)[..., self.lower_tril_indices]  # (B, (M**2-M)/2)
+#             elif feature == "pair_dr":
+#                 boosted_phi = get("phi")
+#                 boosted_eta = get("eta")
+#                 boosted_dphi = abs(boosted_phi[..., None] - boosted_phi[:, None, :])  # (B, M, M)
+#                 boosted_dphi = boosted_dphi.flatten(start_dim=1)[..., self.lower_tril_indices]  # (B, (M**2-M)/2)
+#                 boosted_dphi = torch.where(boosted_dphi > torch.pi, 2 * torch.pi - boosted_dphi, boosted_dphi)
+#                 boosted_deta = boosted_eta[..., None] - boosted_eta[:, None, :]  # (B, M, M)
+#                 boosted_deta = boosted_deta.flatten(start_dim=1)[..., self.lower_tril_indices]  # (B, (M**2-M)/2)
+#                 f = torch.sqrt(boosted_dphi**2 + boosted_deta**2 + self.eps)
+#             else:
+#                 raise RuntimeError(f"unknown feature '{feature}'")
+#             # cache and return
+#             cache[feature] = f
+#             return f
+
+#         # when not clipping weights, boosted vectors can have e < p
+#         if not self.clip_weights:
+#             new_boosted_E = torch.maximum(boosted_vecs[..., E], get("p") + self.eps)
+#             boosted_vecs = torch.stack(
+#                 [new_boosted_E, boosted_vecs[..., PX], boosted_vecs[..., PY], boosted_vecs[..., PZ]],
+#                 dim=-1,
+#             )
+
+#         # collect and combine features
+#         features = torch.cat([get(feature) for feature in self.features], dim=1)  # (B, F)
+#         return features
+
 class LBN(torch.nn.Module):
     """
     Torch implementation of the LBN (Lorentz Boosted Network) feature extractor.
@@ -839,7 +1048,6 @@ class LBN(torch.nn.Module):
     ) -> None:
         super().__init__()
 
-
         # validate features
         if features is None:
             features = self.DEFAULT_FEATURES
@@ -856,6 +1064,10 @@ class LBN(torch.nn.Module):
         self.eps = eps
 
         # constants
+        self.I4: torch.Tensor
+        self.U: torch.Tensor
+        self.U1: torch.Tensor
+        self.lower_tril_indices: torch.Tensor
         self.register_buffer("I4", torch.eye(4, dtype=torch.float32))  # (4, 4)
         self.register_buffer("U", torch.tensor([[-1, 0, 0, 0], *(3 * [[0, -1, -1, -1]])], dtype=torch.float32))
         self.register_buffer("U1", self.U + 1)
@@ -868,28 +1080,6 @@ class LBN(torch.nn.Module):
         self.particle_w = torch.nn.Parameter(torch.rand(N, M) * weight_init_scale)
         self.restframe_w = torch.nn.Parameter(torch.rand(N, M) * weight_init_scale)
 
-    @property
-    def out_features(self) -> int:
-        # determine number of pair-wise feature projections
-        n_pair = sum(1 for f in self.features if f.startswith("pair_"))
-
-        # compute output dimension
-        n = (
-            (
-            len(self.features) - n_pair) * self.M +
-            n_pair * (self.M**2 - self.M) // 2
-        )
-        return n
-
-    def ndim(self):
-        # dim normal features: m * 4
-        non_pair_features_dim = len([f for f in self.features if "pair" not in f]) * self.M
-
-        # dim pair-wise features is MxM Matrix, which diagonal = 0, and symmetric: (M^2 - M)/2
-        pair_features_dim = len([f for f in self.features if "pair" in f]) * ((self.M**2 - self.M) / 2)
-        num = int(non_pair_features_dim + pair_features_dim)
-        return num
-
     def __repr__(self) -> str:
         params = {
             "N": self.N,
@@ -900,24 +1090,88 @@ class LBN(torch.nn.Module):
         params_str = ", ".join(f"{k}={v}" for k, v in params.items())
         return f"{self.__class__.__name__}({params_str}, {hex(id(self))})"
 
+    @functools.cached_property
+    def M_dynamic(self) -> int:
+        # the true number of output particles can be altered by the update_{particle,restframe}_weights hooks, so call
+        # these hooks once to determine the actual output shape
+        dummy_w = torch.rand(self.N, self.M)
+        particle_w = self.update_particle_weights(dummy_w)
+        restframe_w = self.update_restframe_weights(dummy_w)
+
+        # dimensions must match
+        if particle_w.shape != restframe_w.shape:
+            raise RuntimeError(
+                f"update_particle_weights and update_restframe_weights must return tensors of the same shape, got "
+                f"{particle_w.shape} and {restframe_w.shape}",
+            )
+
+        return particle_w.shape[1]
+
+    @functools.cached_property
+    def out_features(self) -> int:
+        # determine number of pair-wise feature projections
+        n_pair = sum(1 for f in self.features if f.startswith("pair_"))
+
+        # compute output dimension
+        M = self.M_dynamic
+        n = (
+            (len(self.features) - n_pair) * M +
+            n_pair * (M**2 - M) // 2
+        )
+
+        return n
+    
+    def ndim(self):
+        # dim normal features: m * 4
+        non_pair_features_dim = len([f for f in self.features if "pair" not in f]) * self.M
+
+        # dim pair-wise features is MxM Matrix, which diagonal = 0, and symmetric: (M^2 - M)/2
+        pair_features_dim = len([f for f in self.features if "pair" in f]) * ((self.M**2 - self.M) / 2)
+        num = int(non_pair_features_dim + pair_features_dim)
+        return num    
+
+    def update_particle_weights(self, w: torch.Tensor) -> torch.Tensor:
+        return w
+
+    def update_restframe_weights(self, w: torch.Tensor) -> torch.Tensor:
+        return w
+
     def update_boosted_vectors(self, boosted_vecs: torch.Tensor) -> torch.Tensor:
         return boosted_vecs
 
-    def forward(self, input_vecs, debug=False) -> torch.Tensor:
-        if debug:
-            from IPython import embed; embed(header="DEBUGGING LBN - 895 in layers.py ")
+    def forward(
+        self,
+        e: torch.Tensor,
+        px: torch.Tensor | None = None,
+        py: torch.Tensor | None = None,
+        pz: torch.Tensor | None = None,
+        /,
+    ) -> torch.Tensor:
         # e, px, py, pz: (B, N)
         E, PX, PY, PZ = range(4)
 
-        # stack 4-vectors
-        # input_vecs = torch.stack((e, px, py, pz), dim=1)  # (B, 4, N)
+        # handle input
+        # all arguments are given, check shapes and stack them, otherwise e must be already stacked
+        if (n_missing := [px, py, pz].count(None)) == 3:
+            # only e provided
+            if e.ndim != 3 or tuple(e.shape[1:]) != (4, self.N):
+                raise Exception(f"input four-vectors have wrong shape {tuple(e.shape)}, expected (B, 4, N)")
+            input_vecs = e  # (B, 4, N)
+        elif n_missing == 0:
+            # all arguments provided, stack 4-vectors to (B, 4, N)
+            input_vecs = torch.stack((e, px, py, pz), dim=1)  # type: ignore[arg-type]
+            pass
+        else:
+            raise Exception(f"forward() expects either 1 or 4 arguments, got {4 - n_missing}")
+
+        # optionally update particle and restframe weights
+        particle_w = self.update_particle_weights(self.particle_w)
+        restframe_w = self.update_restframe_weights(self.restframe_w)
 
         # optionally clip weights to prevent them going negative
-        particle_w = self.particle_w
-        restframe_w = self.restframe_w
-        if self.clip_weights:
-            particle_w = torch.clamp(particle_w, min=0.0)
-            restframe_w = torch.clamp(restframe_w, min=0.0)
+        
+        particle_w = torch.clamp(particle_w, min=0.0)
+        restframe_w = torch.clamp(restframe_w, min=0.0)
 
         # create combinations
         particle_vecs = torch.matmul(input_vecs, particle_w)  # (B, 4, M)
@@ -927,28 +1181,31 @@ class LBN(torch.nn.Module):
         restframe_vecs = restframe_vecs.permute(0, 2, 1)
 
         # regularize vectors such that e > p
-        particle_p = torch.sum(particle_vecs[..., PX:]**2, dim=-1)**0.5  # (B, M)
-        # avoid in-place modifications which break autograd when tensors are used in multiple
-        # places; construct a new tensor with the adjusted energy component
-        new_particle_E = torch.maximum(particle_vecs[..., E], particle_p + self.eps)
-        particle_vecs = torch.stack(
-            [new_particle_E, particle_vecs[..., PX], particle_vecs[..., PY], particle_vecs[..., PZ]],
-            dim=-1,
+        particle_pvecs = particle_vecs[..., PX:]
+        particle_p = torch.sqrt(torch.clamp(torch.sum(particle_pvecs**2, dim=-1), min=0) + self.eps)  # (B, M)
+        particle_vecs = torch.concat(
+            [
+                torch.maximum(particle_vecs[..., E], particle_p + self.eps)[..., None],
+                particle_pvecs,
+            ],
+            dim=2,
         )
-
-        restframe_p = torch.sum(restframe_vecs[..., PX:]**2, dim=-1)**0.5  # (B, M)
-        new_restframe_E = torch.maximum(restframe_vecs[..., E], restframe_p + self.eps)
-        restframe_vecs = torch.stack(
-            [new_restframe_E, restframe_vecs[..., PX], restframe_vecs[..., PY], restframe_vecs[..., PZ]],
-            dim=-1,
+        restframe_pvecs = restframe_vecs[..., PX:]
+        restframe_p = torch.sqrt(torch.clamp(torch.sum(restframe_pvecs**2, dim=-1), min=0) + self.eps)  # (B, M)
+        restframe_vecs = torch.concat(
+            [
+                torch.maximum(restframe_vecs[..., E], restframe_p + self.eps)[..., None],
+                restframe_pvecs,
+            ],
+            dim=2,
         )
 
         # create boost objects
-        restframe_m = (restframe_vecs[..., E]**2 - restframe_p**2)**0.5  # (B, M)
-        gamma = restframe_vecs[..., E] / (self.eps + restframe_m)  # (B, M)
-        beta = restframe_p / restframe_vecs[..., E]  # (B, M)
-        beta_vecs = restframe_vecs[..., PX:] / restframe_vecs[..., E, None]  # (B, M, 3)
-        n_vecs = beta_vecs / beta[..., None]  # (B, M, 3)
+        restframe_m = torch.sqrt(torch.clamp((restframe_vecs[..., E]**2 - restframe_p**2), min=0) + self.eps)  # (B, M)
+        gamma = restframe_vecs[..., E] / (restframe_m + self.eps)  # (B, M)
+        beta = restframe_p / (restframe_vecs[..., E] + self.eps) # (B, M)
+        beta_vecs = restframe_vecs[..., PX:] / (restframe_vecs[..., E, None] + self.eps)  # (B, M, 3)
+        n_vecs = beta_vecs / (beta[..., None] + self.eps)  # (B, M, 3)
         e_vecs = torch.cat([torch.ones_like(n_vecs[..., :1]), -n_vecs], dim=-1)  # (B, M, 4)
 
         # build Lambda
@@ -965,7 +1222,8 @@ class LBN(torch.nn.Module):
         boosted_vecs = self.update_boosted_vectors(boosted_vecs)
 
         # cached feature provision
-        cache = {}
+        cache: dict[str, torch.Tensor] = {}
+
         def get(feature: str) -> torch.Tensor:
             # check cache first
             if feature in cache:
@@ -983,19 +1241,17 @@ class LBN(torch.nn.Module):
             if feature == "pt2":
                 f = get("px")**2 + get("py")**2
             elif feature == "pt":
-                f = get("pt2")**0.5
+                f = torch.sqrt(torch.clamp(get("pt2"), min=0) + self.eps)
             elif feature == "p2":
                 f = get("pt2") + get("pz")**2
             elif feature == "p":
-                f = get("p2")**0.5
+                f = torch.sqrt(torch.clamp(get("p2"), min=0) + self.eps)
             elif feature == "eta":
-                # clamp when near -1 or 1
-                ratio = torch.clip(get("pz") / get("p"), min = -1 + self.eps, max = 1 - self.eps)
-                f = torch.atanh(ratio)
+                f = torch.atanh(torch.clamp(get("pz") / get("p"), min=self.eps - 1.0, max=1.0 - self.eps))
             elif feature == "phi":
                 f = torch.atan2(get("py"), get("px"))
             elif feature == "m":
-                f = (torch.maximum(get("e")**2, get("p2")) - get("p"))**0.5
+                f = torch.sqrt(torch.clamp((torch.maximum(get("e")**2, get("p2")) - get("p")), min=0) + self.eps)
             elif feature == "pair_cos":
                 boosted_pvecs = boosted_vecs[..., PX:]  # (B, M, 3)
                 boosted_p = get("p")
@@ -1011,7 +1267,7 @@ class LBN(torch.nn.Module):
                 boosted_dphi = torch.where(boosted_dphi > torch.pi, 2 * torch.pi - boosted_dphi, boosted_dphi)
                 boosted_deta = boosted_eta[..., None] - boosted_eta[:, None, :]  # (B, M, M)
                 boosted_deta = boosted_deta.flatten(start_dim=1)[..., self.lower_tril_indices]  # (B, (M**2-M)/2)
-                f = (boosted_dphi**2 + boosted_deta**2)**0.5
+                f = torch.sqrt(torch.clamp((boosted_dphi**2 + boosted_deta**2), min=0) + self.eps)
             else:
                 raise RuntimeError(f"unknown feature '{feature}'")
             # cache and return
@@ -1020,16 +1276,18 @@ class LBN(torch.nn.Module):
 
         # when not clipping weights, boosted vectors can have e < p
         if not self.clip_weights:
-            new_boosted_E = torch.maximum(boosted_vecs[..., E], get("p") + self.eps)
-            boosted_vecs = torch.stack(
-                [new_boosted_E, boosted_vecs[..., PX], boosted_vecs[..., PY], boosted_vecs[..., PZ]],
-                dim=-1,
+            boosted_vecs = torch.concat(
+                [
+                    torch.maximum(boosted_vecs[..., E], get("p") + self.eps)[..., None],
+                    boosted_vecs[..., PX:],
+                ],
+                dim=2,
             )
 
         # collect and combine features
         features = torch.cat([get(feature) for feature in self.features], dim=1)  # (B, F)
-        return features
 
+        return features
 
 class LBNFeaturerExtractor(torch.nn.Module):
     def __init__(
@@ -1041,8 +1299,12 @@ class LBNFeaturerExtractor(torch.nn.Module):
         self.particles = self.find_particles_components_in_features()
 
     @property
+    def num_particles(self):
+        return len(self._particles)
+
+    @property
     def _particles(self):
-        return ("vis_tau1", "vis_tau2", "bjet1", "bjet2", "met")
+        return ("vis_tau1", "vis_tau2", "bjet1", "bjet2", "met", "nu1", "nu2")
 
     def find_particles_components_in_features(self):
         # returns dictionary with all indicies of the feature components
@@ -1060,14 +1322,18 @@ class LBNFeaturerExtractor(torch.nn.Module):
         indicies = lambda particle, features : [particles_components[particle][f] for f in features]
         particles = {}
 
-        for f in self._particles[:-1]:
+        for f in self._particles[:-3]:
             particles[f] = indicies(f, ("e", "px", "py", "pz"))
         particles["met"] = indicies("met", ("px", "py"))
+
+        particles["nu1"] = indicies("nu1", ("px", "py", "pz"))
+        particles["nu2"] = indicies("nu2", ("px", "py", "pz"))
         return particles
+
 
     def slice_particles_from_tensor(self, tensor):
         t = []
-        for f in self._particles[:-1]:
+        for f in self._particles[:-3]:
             t.append(tensor[:, self.particles[f]])
 
         # met is special, since we need to reconstruct it: (pt, px, py ,0)
@@ -1077,7 +1343,14 @@ class LBNFeaturerExtractor(torch.nn.Module):
         met_pz = torch.zeros_like(met_pt)
         met = torch.stack((met_pt, met_kinematics[:, 0], met_kinematics[:, 1], met_pz), axis=1)
         t.append(met)
-        t = torch.stack(t, axis=-1) # B, FEATURES (4), particles (5)
+        # add nu, separetley since pt = e: (pt, px, py, pz)
+        for num in (1, 2):
+            nu_kinematics = tensor[:, self.particles[f"nu{num}"]]
+            nu_e = torch.sqrt(torch.sum(nu_kinematics**2, axis=1))
+            nu = torch.stack((nu_e, nu_kinematics[:, 0], nu_kinematics[:, 1], nu_kinematics[:, 2]), axis=1)
+            t.append(nu)
+        # combine everything
+        t = torch.stack(t, axis=-1) # B, FEATURES (4), particles (7)
         return t
 
     def forward(self, x):
@@ -1086,19 +1359,21 @@ class LBNFeaturerExtractor(torch.nn.Module):
 
 
 
+
 class LBN_DNN(torch.nn.Module):
     def __init__(
         self,
         continous_features: list[str],
         M: int = 10,
-        N: int = 4,
+        # no N necessary for LBN, getting information from Feature extractor
         weight_init_scale: float | int = 1.0,
         clip_weights: bool = False,
         eps: float = 1.0e-5,
     ):
         super().__init__()
         self.lbn_feature_extractor = LBNFeaturerExtractor(continous_features=continous_features)
-        self.lbn = LBN(M=M, N=N, clip_weights=clip_weights, eps=eps, weight_init_scale=weight_init_scale)
+
+        self.lbn = LBN(M=M, N=self.lbn_feature_extractor.num_particles, clip_weights=clip_weights, eps=eps, weight_init_scale=weight_init_scale)
         self.lbn_batch_norm = torch.nn.BatchNorm1d(self.lbn.ndim())
 
 
@@ -1106,8 +1381,9 @@ class LBN_DNN(torch.nn.Module):
     def ndim(self):
         return self.lbn.ndim()
 
-    def forward(self, x, debug=False):
+    def forward(self, x):
         x = self.lbn_feature_extractor(x)
-        x = self.lbn(x, debug)
+        x = self.lbn(x)
         x = self.lbn_batch_norm(x)
         return x
+
