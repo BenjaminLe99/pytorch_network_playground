@@ -52,11 +52,6 @@ if __name__ == '__main__':
     )
 
     parser.add_argument(
-        "--tbname",
-        help="Tag for the tensorboard folder",
-    )
-
-    parser.add_argument(
         "--tbdestination",
         help="Destination folder. Ex.: --tbdestination destination  -->  tensorboard/destination",
     )
@@ -106,8 +101,8 @@ if __name__ == '__main__':
     parser.add_argument(
         "--strength_param",
         type=float,
-        default=False,
-        help="Modifies the strength between the weight matrices. Multiplies the background vs. signal loss."
+        default=1,
+        help="Modifies the strength between the weight matrices. Multiplies the kappa lambda vs. kappa lambda loss."
     )
 
     group = parser.add_mutually_exclusive_group(required=True)
@@ -143,17 +138,13 @@ if __name__ == '__main__':
     )
 
     args = parser.parse_args()
-
     dataset_config = get_dataset_config(args.datasets, args.eras)
     target_map = dataset_config['target_map']
-
     config['save_model_name'] = args.modelname
     lr_range_test = args.lr_range_test
     checkpoint_disabled = args.disable_checkpoints
     tensorboard_disabled = args.disable_tensorboard
-
     strength_param = args.strength_param
-
     optimizer_config['lr'] = args.lr
 
     logger = get_logger(__name__)
@@ -163,13 +154,8 @@ if __name__ == '__main__':
     DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     VERBOSE = False
 
-    # config["sample_ratio"] = {key: 1/len(target_map) for key in target_map}
-
     if len(args.datasets) != len(args.sample_ratio) and 'hh' not in args.datasets:
         raise ValueError("datasets and sample_ratio must have the same length")
-    
-    # if sum(args.sample_ratio) != 1:
-    #     raise ValueError("sample ratio must sum to 1.")
     
     config["sample_ratio"] = dict(zip(target_map, args.sample_ratio))
 
@@ -190,7 +176,7 @@ if __name__ == '__main__':
     logger.info(f"Running DEVICE is {DEVICE}")
     # load data
     if tensorboard_disabled == False:
-        tboard_writer = TensorboardLogger(name=hash_config(config), model_name=args.tbname, destination=args.tbdestination)
+        tboard_writer = TensorboardLogger(name=hash_config(config), model_name=args.modelname, destination=args.tbdestination)
         logger.warning(f"Tensorboard logs are stored in {tboard_writer.path}")
     for current_fold in (config["train_folds"]):
         logger.info(f'Start Training of fold {current_fold} from {config["k_fold"] - 1}')
@@ -272,25 +258,37 @@ if __name__ == '__main__':
         
         early_stopper_inst = EarlyStopOnPlateau()
 
-        # always 3 classes for the first weight matrix
-        weight_matrix_A_dim = 3
+        if 'hh' not in target_map:
+            # always 3 classes for the first weight matrix
+            weight_matrix_A_dim = 3
 
-        # always the number of classes minus the background classes
-        weight_matrix_B_dim = len(target_map) - 2
+            # always the number of classes minus the background classes
+            weight_matrix_B_dim = len(target_map) - 2
 
-        # construct matrices based on classes
-        if args.diag_A is not None:
-            weight_matrix_A = torch.diag(torch.tensor(args.diag_A))
+            # construct matrices based on classes
+            if args.diag_A is not None:
+                weight_matrix_A = torch.diag(torch.tensor(args.diag_A))
+            else:
+                weight_matrix_A = torch.tensor(args.weightmatrix_A).view(weight_matrix_A_dim,weight_matrix_A_dim)
+
+            if args.diag_B is not None:
+                weight_matrix_B = torch.diag(torch.tensor(args.diag_B))
+            else:
+                weight_matrix_B = torch.tensor(args.weightmatrix_B).view(weight_matrix_B_dim,weight_matrix_B_dim)
+            
+            weight_matrix_A = weight_matrix_A.to(DEVICE)
+            weight_matrix_B = weight_matrix_B.to(DEVICE)
+
         else:
-            weight_matrix_A = torch.tensor(args.weightmatrix_A).view(weight_matrix_A_dim,weight_matrix_A_dim)
-
-        if args.diag_B is not None:
-            weight_matrix_B = torch.diag(torch.tensor(args.diag_B))
-        else:
-            weight_matrix_B = torch.tensor(args.weightmatrix_B).view(weight_matrix_B_dim,weight_matrix_B_dim)
-        
-        weight_matrix_A = weight_matrix_A.to(DEVICE)
-        weight_matrix_B = weight_matrix_B.to(DEVICE)
+            # construct only weight matrix A if training with hh as signal class
+            weight_matrix_A_dim = 3
+            if args.diag_A is not None:
+                weight_matrix_A = torch.diag(torch.tensor(args.diag_A))
+            else:
+                weight_matrix_A = torch.tensor(args.weightmatrix_A).view(weight_matrix_A_dim,weight_matrix_A_dim)    
+            
+            weight_matrix_A = weight_matrix_A.to(DEVICE)
+            weight_matrix_B = None        
 
         print("signal vs. background matrix:")
         print(weight_matrix_A)

@@ -1042,6 +1042,7 @@ class LBN(torch.nn.Module):
         M: int,
         *,
         features: Sequence[str] | None = None,
+        feature_order:Sequence[str] | None = None,
         weight_init_scale: float | int = 1.0,
         clip_weights: bool = False,
         eps: float = 1.0e-5,
@@ -1059,6 +1060,7 @@ class LBN(torch.nn.Module):
         self.N = N
         self.M = M
         self.features = list(features)
+        self.feature_order = feature_order
         self.weight_init_scale = weight_init_scale
         self.clip_weights = clip_weights
         self.eps = eps
@@ -1288,6 +1290,30 @@ class LBN(torch.nn.Module):
         features = torch.cat([get(feature) for feature in self.features], dim=1)  # (B, F)
 
         return features
+    
+
+
+class LBN_HH(LBN):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args,**kwargs)
+        assert all(feature in self.feature_order for feature in ["vis_tau1", "vis_tau2", "nu1", "nu2", "bjet1", "bjet2"])
+        h_tt_features = ["vis_tau1", "vis_tau2", "nu1", "nu2"]
+        h_bb_features = ["bjet1", "bjet2"]
+        hh_features = ["vis_tau1", "vis_tau2", "nu1", "nu2", "bjet1", "bjet2"]
+        self.register_buffer(
+            "hh_particle_w",
+            torch.tensor([[1 if feature in h_tt_features else 0 for feature in self.feature_order],  # linear combination for h_tautau_reg
+                          [1 if feature in h_bb_features else 0 for feature in self.feature_order],  # linear combination for h_bb
+                          [1 if feature in hh_features else 0 for feature in self.feature_order]], # linear combination for hh
+                          dtype=torch.float32).T,
+        )
+        print(self.feature_order)
+        print(self.hh_particle_w)
+
+    def update_particle_weights(self, w):
+        return torch.concat([w[:,:-3], self.hh_particle_w], dim=1)
+
+
 
 class LBNFeaturerExtractor(torch.nn.Module):
     def __init__(
@@ -1373,7 +1399,7 @@ class LBN_DNN(torch.nn.Module):
         super().__init__()
         self.lbn_feature_extractor = LBNFeaturerExtractor(continous_features=continous_features)
 
-        self.lbn = LBN(M=M, N=self.lbn_feature_extractor.num_particles, clip_weights=clip_weights, eps=eps, weight_init_scale=weight_init_scale)
+        self.lbn = LBN_HH(M=M, feature_order=self.lbn_feature_extractor._particles, N=self.lbn_feature_extractor.num_particles, clip_weights=clip_weights, eps=eps, weight_init_scale=weight_init_scale)
         self.lbn_batch_norm = torch.nn.BatchNorm1d(self.lbn.ndim())
 
 

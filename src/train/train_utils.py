@@ -17,31 +17,35 @@ def training_default(model, loss_fn, optimizer, target_map, strength_param, samp
     cont, cat, targets = sampler.sample_batch(device=device)
     logits = model(categorical_inputs=cat, continuous_inputs=cont)
 
-    # get indices for the kappa lambda classes
-    group_indices = [value for key, value in target_map.items() if key in ['kl0','kl1','kl2','kl5']]
-    start_idx = min(group_indices)
-    end_idx = max(group_indices) + 1
+    if 'hh' not in target_map:
+        # get indices for the kappa lambda classes
+        group_indices = [value for key, value in target_map.items() if key in ['kl0','kl1','kl2','kl5']]
+        start_idx = min(group_indices)
+        end_idx = max(group_indices) + 1
 
-    # prep for background vs signal loss
-    bg_targets = targets[:,:start_idx]
-    sig_targets = targets[:,start_idx:end_idx].sum(dim=1, keepdim=True)
-    group_targets = torch.cat([bg_targets,sig_targets], dim=1)
-    
-    # prep for kappa lambda vs kappa lambda loss
-    kl_targets = targets[:,start_idx:end_idx]
-    kl_logits = logits[:,start_idx:end_idx]
+        # prep for background vs signal loss
+        bg_targets = targets[:,:start_idx]
+        sig_targets = targets[:,start_idx:end_idx].sum(dim=1, keepdim=True)
+        group_targets = torch.cat([bg_targets,sig_targets], dim=1)
+        
+        # prep for kappa lambda vs kappa lambda loss
+        kl_targets = targets[:,start_idx:end_idx]
+        kl_logits = logits[:,start_idx:end_idx]
 
-    # calculate the loss for background vs signal and kappa lambda vs kappa lambda
-    group_loss, *other_group_losses = loss_fn(logits, group_targets, start_idx=start_idx, end_idx=end_idx)
-    kl_loss, *other_kl_losses = loss_fn(kl_logits, kl_targets)
+        # calculate the loss for background vs signal and kappa lambda vs kappa lambda
+        group_loss, *other_group_losses = loss_fn(logits, group_targets, start_idx=start_idx, end_idx=end_idx)
+        kl_loss, *other_kl_losses = loss_fn(kl_logits, kl_targets)
 
-    # safely extract dicts incase None was passed in the loss components dict.
-    dict_group = other_group_losses[0] if other_group_losses else {}
-    dict_kl = other_kl_losses[0] if other_kl_losses else {}
+        # safely extract dicts incase None was passed in the loss components dict.
+        dict_group = other_group_losses[0] if other_group_losses else {}
+        dict_kl = other_kl_losses[0] if other_kl_losses else {}
 
-    other_losses = [dict_group | dict_kl]
+        other_losses = [dict_group | dict_kl]
 
-    loss = (strength_param * group_loss) + kl_loss
+        loss = group_loss + (strength_param * kl_loss)
+    else:
+        loss, *other_losses = loss_fn(logits, targets)
+
     loss.backward()
 
     for name, p in model.named_parameters():
@@ -94,30 +98,33 @@ def validation_default(model, loss_fn, target_map, strength_param, sampler, devi
             other_dataset_losses = {}
             for cont, cat, tar in validation_batch_generator:
                 logits = model(categorical_inputs=cat, continuous_inputs=cont)
-
-                # get indices for the kappa lambda classes
-                group_indices = [value for key, value in target_map.items() if key in ['kl0','kl1','kl2','kl5']]
-                start_idx = min(group_indices)
-                end_idx = max(group_indices) + 1
-
-                # prep for background vs signal loss
-                bg_targets = tar[:,:start_idx]
-                sig_targets = tar[:,start_idx:end_idx].sum(dim=1, keepdim=True)
-                group_targets = torch.cat([bg_targets,sig_targets], dim=1)
                 
-                # prep for kappa lambda vs kappa lambda loss
-                kl_targets = tar[:,start_idx:end_idx]
-                kl_logits = logits[:,start_idx:end_idx]
+                if 'hh' not in target_map:
+                    # get indices for the kappa lambda classes
+                    group_indices = [value for key, value in target_map.items() if key in ['kl0','kl1','kl2','kl5']]
+                    start_idx = min(group_indices)
+                    end_idx = max(group_indices) + 1
 
-                # calculate the loss for background vs signal and kappa lambda vs kappa lambda
-                group_loss, *other_group_losses = loss_fn(logits, group_targets, start_idx=start_idx, end_idx=end_idx)
-                kl_loss, *other_kl_losses = loss_fn(kl_logits, kl_targets)
+                    # prep for background vs signal loss
+                    bg_targets = tar[:,:start_idx]
+                    sig_targets = tar[:,start_idx:end_idx].sum(dim=1, keepdim=True)
+                    group_targets = torch.cat([bg_targets,sig_targets], dim=1)
+                    
+                    # prep for kappa lambda vs kappa lambda loss
+                    kl_targets = tar[:,start_idx:end_idx]
+                    kl_logits = logits[:,start_idx:end_idx]
 
-                dict_group = other_group_losses[0] if other_group_losses else {}
-                dict_kl = other_kl_losses[0] if other_kl_losses else {}
+                    # calculate the loss for background vs signal and kappa lambda vs kappa lambda
+                    group_loss, *other_group_losses = loss_fn(logits, group_targets, start_idx=start_idx, end_idx=end_idx)
+                    kl_loss, *other_kl_losses = loss_fn(kl_logits, kl_targets)
 
-                other_losses = [dict_group | dict_kl]
-                loss = (strength_param * group_loss) + kl_loss
+                    dict_group = other_group_losses[0] if other_group_losses else {}
+                    dict_kl = other_kl_losses[0] if other_kl_losses else {}
+
+                    other_losses = [dict_group | dict_kl]
+                    loss = (strength_param * group_loss) + kl_loss
+                else:
+                    loss, *other_losses = loss_fn(logits, tar)
                 dataset_losses.append(loss)
                 
                 if other_losses:

@@ -73,7 +73,6 @@ model_building_config = {
     "freeze_skip_connection": True,
     "batch_norm_eps" : 0.001, # marcel : 0.001
     "LBN_M" : 10,
-
 }
 
 config = {

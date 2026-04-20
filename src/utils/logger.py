@@ -79,6 +79,8 @@ class TensorboardLogger():
         t = strftime("%Y_%m_%d-%H_%M_%S", localtime())
         new_stem = f"{t}-{self.name}-{self.hash}"
         logger_path = self.log_dir / self.destination / new_stem
+        # create the folder if it doesnt exist.
+        logger_path.mkdir(parents=True, exist_ok=True)
         return logger_path
 
     def create_tensorboard_writer(self, config=None, log_dir=None):

@@ -197,8 +197,7 @@ class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
     def calculate_loss(self, logits, targets, **kwargs):
         
         start_idx = kwargs.get('start_idx')
-
-        if start_idx:
+        if start_idx or self.weight_matrix_B is None:
             weight_matrix = self.weight_matrix_A
             self.weight_matrix = weight_matrix
         else:
@@ -303,6 +302,10 @@ class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
 
         probabilities = torch.nn.functional.softmax(logits, dim=1) # output probabilities
         false_class_log_probability = torch.log(1 - probabilities + 1e-10) # log probability of false classes
+
+        # log_p = torch.nn.functional.log_softmax(logits, dim=1)
+        # one_minus_p = -torch.expm1(log_p)
+        # false_class_log_probability = torch.log(one_minus_p.clamp(min=1e-10))
 
         return false_class_log_probability
     
