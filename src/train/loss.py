@@ -162,10 +162,11 @@ class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
     Off-diagonal entries give weights to False-class log loss terms log(1-p), adding additional penalties for high false class prediction scores.
     Takes logits as inputs.
     """
-    def __init__(self, weight_matrix_A, weight_matrix_B, loss_components_dict=None, device=None, **kwargs):
+    def __init__(self, weight_matrix_A, weight_matrix_B, normalization="none", loss_components_dict=None, device=None, **kwargs):
         super(WeightedFalseClassPenaltyLogLoss, self).__init__()
         self.weight_matrix_A = weight_matrix_A
         self.weight_matrix_B = weight_matrix_B
+        self.normalization = normalization
         self.loss_components_dict = loss_components_dict # dict containing various combinations of loss components of the weight matrix one wants to calculate in addition.
         self.device = device
 
@@ -180,6 +181,29 @@ class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
             return loss, loss_dict
 
         return (loss,)
+    
+    def normalize_weight_matrix(self):
+        if self.normalization == 'global_sum':
+        # Sum of all elements in the entire matrix
+            total_sum = torch.sum(torch.abs(self.weight_matrix))            
+            if total_sum == 0:
+                self.weight_matrix = self.weight_matrix
+            else:
+                self.weight_matrix = self.weight_matrix / total_sum
+        
+        elif self.normalization == 'max_norm':
+            # Divide all elements by the maximum value found in the matrix
+            max_val = torch.max(torch.abs(self.weight_matrix))
+            if max_val == 0:
+                self.weight_matrix = self.weight_matrix
+            else:
+                self.weight_matrix = self.weight_matrix / max_val
+        
+        elif self.normalization == 'none':
+            self.weight_matrix = self.weight_matrix
+            
+        else:
+            raise ValueError("normalization must be 'global_sum', 'max_norm' or 'none'")
     
     def align_logits_to_targets(self, logits, targets, **kwargs):
 
@@ -219,7 +243,7 @@ class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
         #     print("Inf detected in false_class_log_prob!")
 
         # pick out the row of the class
-        weight_rows = targets @ weight_matrix 
+        weight_rows = targets @ self.weight_matrix 
 
         # calculate loss of target class
         true_class_loss = (targets * weight_rows * true_class_log_prob).sum(dim=1)  # batch of only target loss
@@ -299,13 +323,10 @@ class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
         return true_class_log_probability
 
     def false_class_log_probabilities(self, logits):
-
-        probabilities = torch.nn.functional.softmax(logits, dim=1) # output probabilities
-        false_class_log_probability = torch.log(1 - probabilities + 1e-10) # log probability of false classes
-
-        # log_p = torch.nn.functional.log_softmax(logits, dim=1)
-        # one_minus_p = -torch.expm1(log_p)
-        # false_class_log_probability = torch.log(one_minus_p.clamp(min=1e-10))
+        
+        log_probabilities = torch.nn.functional.log_softmax(logits, dim=1)
+        one_minus_p = -torch.expm1(log_probabilities)
+        false_class_log_probability = torch.log(one_minus_p.clamp(min=1e-10))
 
         return false_class_log_probability
     

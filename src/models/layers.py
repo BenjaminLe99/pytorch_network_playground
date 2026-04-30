@@ -1302,9 +1302,9 @@ class LBN_HH(LBN):
         hh_features = ["vis_tau1", "vis_tau2", "nu1", "nu2", "bjet1", "bjet2"]
         self.register_buffer(
             "hh_particle_w",
-            torch.tensor([[1 if feature in h_tt_features else 0 for feature in self.feature_order],  # linear combination for h_tautau_reg
-                          [1 if feature in h_bb_features else 0 for feature in self.feature_order],  # linear combination for h_bb
-                          [1 if feature in hh_features else 0 for feature in self.feature_order]], # linear combination for hh
+            torch.tensor([[1 if feature in h_tt_features else 0 for feature in self.feature_order],     # linear combination for h_tautau_reg
+                          [1 if feature in h_bb_features else 0 for feature in self.feature_order],     # linear combination for h_bb
+                          [1 if feature in hh_features else 0 for feature in self.feature_order]],      # linear combination for hh
                           dtype=torch.float32).T,
         )
         print(self.feature_order)

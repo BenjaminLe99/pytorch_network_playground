@@ -16,7 +16,7 @@ import optimizer
 from train_config import (
     config, get_dataset_config, model_building_config, optimizer_config, scheduler_config, extra_losses
 )
-from train_utils import training_fn, validation_fn, log_metrics
+from train_utils import training_fn, validation_fn, log_metrics, matrix_normalization
 from early_stopping import EarlyStopSignal, EarlyStopOnPlateau
 from export import torch_save, torch_export_v2
 import marcel_weight_translation as mwt
@@ -105,6 +105,20 @@ if __name__ == '__main__':
         help="Modifies the strength between the weight matrices. Multiplies the kappa lambda vs. kappa lambda loss."
     )
 
+    parser.add_argument(
+        "--only_one_weightmatrix",
+        type=bool,
+        default=False,
+        help="If true, then the model trains with only one weightmatrix of dim [num_classes, num_classes]."
+    )
+
+    parser.add_argument(
+        "--normalization_scheme",
+        required=True,
+        default="none",
+        help="normlization scheme for the weight matrix. Options: 'none', 'global_sum', 'max_norm'."
+    )
+
     group = parser.add_mutually_exclusive_group(required=True)
     
     group.add_argument(
@@ -121,7 +135,7 @@ if __name__ == '__main__':
         help="Diagonal matrix of the weight matrix."
     )
 
-    group2 = parser.add_mutually_exclusive_group(required=True)
+    group2 = parser.add_mutually_exclusive_group(required=False)
     
     group2.add_argument(
         "--weightmatrix_B",
@@ -145,7 +159,9 @@ if __name__ == '__main__':
     checkpoint_disabled = args.disable_checkpoints
     tensorboard_disabled = args.disable_tensorboard
     strength_param = args.strength_param
+    only_one_weightmatrix = args.only_one_weightmatrix
     optimizer_config['lr'] = args.lr
+    normalization = args.normalization_scheme
 
     logger = get_logger(__name__)
 
@@ -241,6 +257,12 @@ if __name__ == '__main__':
         optimizer_inst = torch.optim.AdamW(list(weight_decay_parameters.values()), lr=optimizer_config["lr"])
         # optimizer_inst = optimizer.SAM(list(weight_decay_parameters.values()), torch.optim.AdamW, lr=optimizer_config["lr"], rho = 2.0, adaptive=True)
 
+        # warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        #     optimizer_inst, 
+        #     start_factor=config["warmup_start_factor"], 
+        #     total_iters=config["warmup_iterations"]
+        # )
+
         scheduler_inst = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer=optimizer_inst,
             mode='min',
@@ -258,7 +280,7 @@ if __name__ == '__main__':
         
         early_stopper_inst = EarlyStopOnPlateau()
 
-        if 'hh' not in target_map:
+        if 'hh' not in target_map and not only_one_weightmatrix:
             # always 3 classes for the first weight matrix
             weight_matrix_A_dim = 3
 
@@ -279,7 +301,7 @@ if __name__ == '__main__':
             weight_matrix_A = weight_matrix_A.to(DEVICE)
             weight_matrix_B = weight_matrix_B.to(DEVICE)
 
-        else:
+        elif 'hh' in target_map and not only_one_weightmatrix:
             # construct only weight matrix A if training with hh as signal class
             weight_matrix_A_dim = 3
             if args.diag_A is not None:
@@ -288,12 +310,28 @@ if __name__ == '__main__':
                 weight_matrix_A = torch.tensor(args.weightmatrix_A).view(weight_matrix_A_dim,weight_matrix_A_dim)    
             
             weight_matrix_A = weight_matrix_A.to(DEVICE)
-            weight_matrix_B = None        
-
+            weight_matrix_B = None
+        
+        # train model with only one weightmatrix of dim [num_classes, num_classes]
+        elif only_one_weightmatrix == True:
+            weight_matrix_A_dim = len(target_map)
+            if args.diag_A is not None:
+                weight_matrix_A = torch.diag(torch.tensor(args.diag_A))
+            else:
+                weight_matrix_A = torch.tensor(args.weightmatrix_A).view(weight_matrix_A_dim,weight_matrix_A_dim)    
+            
+            weight_matrix_A = weight_matrix_A.to(DEVICE)
+            weight_matrix_B = None
+        
         print("signal vs. background matrix:")
         print(weight_matrix_A)
         print("kappa lambda vs. kappa lambda matrix:")
         print(weight_matrix_B)
+
+        # print normalized weight matrices
+        print('normalizing matrices:')
+        weight_matrix_A = matrix_normalization(weight_matrix_A,normalization)
+        weight_matrix_B = matrix_normalization(weight_matrix_B,normalization)
 
         if extra_losses is not None:
             print("Also computing the following non-contributing losses:")
@@ -302,7 +340,7 @@ if __name__ == '__main__':
 
         # HINT: requires only logits, no softmax at end
         #loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
-        loss_fn = WeightedFalseClassPenaltyLogLoss(weight_matrix_A=weight_matrix_A, weight_matrix_B=weight_matrix_B, loss_components_dict=extra_losses, device=DEVICE)
+        loss_fn = WeightedFalseClassPenaltyLogLoss(weight_matrix_A=weight_matrix_A, weight_matrix_B=weight_matrix_B, normalization=normalization ,loss_components_dict=extra_losses, device=DEVICE)
 
         if lr_range_test == True:
             print("Starting learning rate range test.")
@@ -356,6 +394,7 @@ if __name__ == '__main__':
                 optimizer = optimizer_inst,
                 target_map = target_map,
                 strength_param = strength_param,
+                only_one_weightmatrix=only_one_weightmatrix,
                 sampler = training_sampler,
                 device = DEVICE,
             )
@@ -370,10 +409,20 @@ if __name__ == '__main__':
                     tboard_writer.log_loss({"batch_loss": t_loss.item()}, step=current_iteration)
                 print(f"Training: {current_iteration} - batch loss: {t_loss.item():.4f}")
 
+            # if current_iteration < config["warmup_iterations"]:
+            #     warmup_scheduler.step()
+            #     print(f"learning rate warm-up in progress: {current_iteration}/{config['warmup_iterations']} lr: {optimizer_inst.param_groups[0]['lr']}")
+
             if (current_iteration % config["validation_interval"] == 0):
                 # evaluation of training data
                 print(f"Running evaluation of training data at iteration {current_iteration}...")
-                eval_t_loss, (eval_t_pred, eval_t_tar, eval_t_weights), *eval_t_other_loss = validation_fn(model, loss_fn, target_map, strength_param, training_sampler, device=DEVICE)
+                eval_t_loss, (eval_t_pred, eval_t_tar, eval_t_weights), *eval_t_other_loss = validation_fn(model,
+                                                                                                           loss_fn, 
+                                                                                                           target_map, 
+                                                                                                           strength_param, 
+                                                                                                           only_one_weightmatrix, 
+                                                                                                           training_sampler, 
+                                                                                                           device=DEVICE)
 
                 if torch.isnan(eval_t_loss):
                     print('training loss is a nan')
@@ -399,7 +448,13 @@ if __name__ == '__main__':
                 print(f"Running evaluation of validation data at iteration {current_iteration}...")
                 
                 # evaluation of validation
-                eval_v_loss, (eval_v_pred, eval_v_tar, eval_v_weights), *eval_v_other_loss = validation_fn(model, loss_fn, target_map, strength_param, validation_sampler, device=DEVICE)
+                eval_v_loss, (eval_v_pred, eval_v_tar, eval_v_weights), *eval_v_other_loss = validation_fn(model, 
+                                                                                                           loss_fn, 
+                                                                                                           target_map, 
+                                                                                                           strength_param, 
+                                                                                                           only_one_weightmatrix, 
+                                                                                                           validation_sampler, 
+                                                                                                           device=DEVICE)
 
                 if torch.isnan(eval_v_loss):
                     print('validation loss is a nan')
@@ -421,21 +476,21 @@ if __name__ == '__main__':
                     )
                 print(f"Evaluation: it: {current_iteration} - TLoss: {eval_t_loss:.4f} VLoss: {eval_v_loss:.4f}")
 
+                if current_iteration > config["warmup_iterations"]:
+                    # if (current_iteration % 1000 == 0) and (current_iteration > 0):
+                    previous_lr = optimizer_inst.param_groups[0]["lr"]
+                    scheduler_inst.step(eval_v_loss)
+                    logger.info(f"{previous_lr} -> {optimizer_inst.param_groups[0]['lr']}")
+                    new_lr = optimizer_inst.param_groups[0]['lr']
 
-                # if (current_iteration % 1000 == 0) and (current_iteration > 0):
-                previous_lr =  optimizer_inst.param_groups[0]["lr"]
-                scheduler_inst.step(eval_v_loss)
-                logger.info(f"{previous_lr} -> {optimizer_inst.param_groups[0]['lr']}")
-                new_lr = optimizer_inst.param_groups[0]['lr']
-
-                # restore model state of best validation if checkpoint enabled
-                if checkpoint_disabled == False:
-                    if previous_lr > optimizer_inst.param_groups[0]['lr']:
-                        print("validation did not improve for 10 validations, restoring weights of best validation and reducing learning rate.")
-                        model.load_state_dict(model_checkpoint["model_state"])
-                        optimizer_inst.load_state_dict(model_checkpoint["optimizer_state"])
-                        for g in optimizer_inst.param_groups:
-                            g['lr'] = new_lr
+                    # restore model state of best validation if checkpoint enabled
+                    if checkpoint_disabled == False:
+                        if previous_lr > optimizer_inst.param_groups[0]['lr']:
+                            print("validation did not improve for 10 validations, restoring weights of best validation and reducing learning rate.")
+                            model.load_state_dict(model_checkpoint["model_state"])
+                            optimizer_inst.load_state_dict(model_checkpoint["optimizer_state"])
+                            for g in optimizer_inst.param_groups:
+                                g['lr'] = new_lr
                     
                 ### early stopping
                 # when val loss is lowest over a period of patience

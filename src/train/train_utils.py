@@ -11,13 +11,13 @@ def register(fn):
     return fn
 
 @register
-def training_default(model, loss_fn, optimizer, target_map, strength_param, sampler, device):
+def training_default(model, loss_fn, optimizer, target_map, strength_param, only_one_weightmatrix, sampler, device):
     optimizer.zero_grad()
 
     cont, cat, targets = sampler.sample_batch(device=device)
     logits = model(categorical_inputs=cat, continuous_inputs=cont)
 
-    if 'hh' not in target_map:
+    if 'hh' not in target_map and only_one_weightmatrix == False:
         # get indices for the kappa lambda classes
         group_indices = [value for key, value in target_map.items() if key in ['kl0','kl1','kl2','kl5']]
         start_idx = min(group_indices)
@@ -43,7 +43,7 @@ def training_default(model, loss_fn, optimizer, target_map, strength_param, samp
         other_losses = [dict_group | dict_kl]
 
         loss = group_loss + (strength_param * kl_loss)
-    else:
+    elif 'hh' in target_map or only_one_weightmatrix == True:
         loss, *other_losses = loss_fn(logits, targets)
 
     loss.backward()
@@ -83,7 +83,7 @@ def training_sam(model, loss_fn, optimizer, sampler, device):
     return loss, (pred, targets)
 
 @register
-def validation_default(model, loss_fn, target_map, strength_param, sampler, device):
+def validation_default(model, loss_fn, target_map, strength_param, only_one_weightmatrix, sampler, device):
     with torch.no_grad():
         # run validation every x steps
         val_loss = []
@@ -99,7 +99,7 @@ def validation_default(model, loss_fn, target_map, strength_param, sampler, devi
             for cont, cat, tar in validation_batch_generator:
                 logits = model(categorical_inputs=cat, continuous_inputs=cont)
                 
-                if 'hh' not in target_map:
+                if 'hh' not in target_map and only_one_weightmatrix == False:
                     # get indices for the kappa lambda classes
                     group_indices = [value for key, value in target_map.items() if key in ['kl0','kl1','kl2','kl5']]
                     start_idx = min(group_indices)
@@ -123,7 +123,7 @@ def validation_default(model, loss_fn, target_map, strength_param, sampler, devi
 
                     other_losses = [dict_group | dict_kl]
                     loss = (strength_param * group_loss) + kl_loss
-                else:
+                elif 'hh' in target_map or only_one_weightmatrix == True:
                     loss, *other_losses = loss_fn(logits, tar)
                 dataset_losses.append(loss)
                 
@@ -223,3 +223,27 @@ def log_metrics(tensorboard_inst, iteration_step, sampler_output, target_map, mo
 
 training_fn = functions.get(f"training_{train_config.config['training_fn']}")
 validation_fn = functions.get(f"validation_{train_config.config['validation_fn']}")
+
+def matrix_normalization(matrix, normalization):
+    if normalization == 'global_sum':
+        total_sum = torch.sum(torch.abs(matrix))            
+        if total_sum == 0:
+            matrix = matrix
+            print(matrix)
+        else:
+            matrix = matrix / total_sum
+            print(matrix / total_sum)
+
+    elif normalization == 'max_norm':
+        max_val = torch.max(torch.abs(matrix))            
+        if max_val == 0:
+            matrix = matrix
+            print(matrix)
+        else:
+            matrix = matrix / max_val
+            print(matrix / max_val)
+
+    elif normalization == 'none':
+        print(matrix)
+
+    return matrix

@@ -94,7 +94,9 @@ config = {
     "load_marcel_stats" : False,
     "load_marcel_weights" : False,
     "training_fn" : "default", # chooses the training function
-    "validation_fn" : "default"
+    "validation_fn" : "default",
+    "warmup_start_factor": 0.0001,
+    "warmup_iterations": 0
 }
 
 scheduler_config = {
