@@ -16,7 +16,7 @@ import optimizer
 from train_config import (
     config, get_dataset_config, model_building_config, optimizer_config, scheduler_config, extra_losses
 )
-from train_utils import training_fn, validation_fn, log_metrics, matrix_normalization
+from train_utils import training_fn, validation_fn, log_metrics
 from early_stopping import EarlyStopSignal, EarlyStopOnPlateau
 from export import torch_save, torch_export_v2
 import marcel_weight_translation as mwt
@@ -119,6 +119,15 @@ if __name__ == '__main__':
         help="normlization scheme for the weight matrix. Options: 'none', 'global_sum', 'max_norm'."
     )
 
+    parser.add_argument(
+        "--mhh_weights",
+        required=True,
+        nargs=2,
+        type=float,
+        default=(1.0,1.0),
+        help="maximum and minimum event weight based on the events mhh value."
+    )
+
     group = parser.add_mutually_exclusive_group(required=True)
     
     group.add_argument(
@@ -162,6 +171,7 @@ if __name__ == '__main__':
     only_one_weightmatrix = args.only_one_weightmatrix
     optimizer_config['lr'] = args.lr
     normalization = args.normalization_scheme
+    mhh_weights = tuple(args.mhh_weights)
 
     logger = get_logger(__name__)
 
@@ -322,16 +332,6 @@ if __name__ == '__main__':
             
             weight_matrix_A = weight_matrix_A.to(DEVICE)
             weight_matrix_B = None
-        
-        print("signal vs. background matrix:")
-        print(weight_matrix_A)
-        print("kappa lambda vs. kappa lambda matrix:")
-        print(weight_matrix_B)
-
-        # print normalized weight matrices
-        print('normalizing matrices:')
-        weight_matrix_A = matrix_normalization(weight_matrix_A,normalization)
-        weight_matrix_B = matrix_normalization(weight_matrix_B,normalization)
 
         if extra_losses is not None:
             print("Also computing the following non-contributing losses:")
@@ -340,7 +340,7 @@ if __name__ == '__main__':
 
         # HINT: requires only logits, no softmax at end
         #loss_fn = torch.nn.CrossEntropyLoss(weight=None, size_average=None,label_smoothing=config["label_smoothing"])
-        loss_fn = WeightedFalseClassPenaltyLogLoss(weight_matrix_A=weight_matrix_A, weight_matrix_B=weight_matrix_B, normalization=normalization ,loss_components_dict=extra_losses, device=DEVICE)
+        loss_fn = WeightedFalseClassPenaltyLogLoss(weight_matrix_A=weight_matrix_A, weight_matrix_B=weight_matrix_B, normalization=normalization, mhh_weights=mhh_weights, loss_components_dict=extra_losses, device=DEVICE)
 
         if lr_range_test == True:
             print("Starting learning rate range test.")

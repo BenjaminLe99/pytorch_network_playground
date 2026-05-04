@@ -277,7 +277,6 @@ class BNetLBNDenseNet(torch.nn.Module):
             self.lbn(continuous_inputs)),
             axis=1
         )
-
         # dnn
         x = self.transition_dense_1(x)
         x = self.dense_block_1(x)
@@ -306,6 +305,6 @@ class AddActFnToModel(torch.nn.Module):
             raise AttributeError(f"Object has no attribute '{attr}'")
 
     def forward(self, categorical_inputs, continuous_inputs):
-        x = self.model(categorical_inputs, continuous_inputs)
+        x,_ = self.model(categorical_inputs, continuous_inputs)
         x = self.act_func(x)
         return x

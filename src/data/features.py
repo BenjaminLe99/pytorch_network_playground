@@ -56,10 +56,14 @@ def input_features(debug=False, debug_length=3):
         "nu2_px","nu2_py","nu2_pz",
     ]
 
+    construct_continuous_features: list[str] = [
+        # "htthbb_mass"
+    ]
+
     continous_features =  [add_prefix(f, data_prefix, ignore_code="_") for f in continous_features]
     categorical_features =  [add_prefix(f, data_prefix, ignore_code="_") for f in categorical_features]
 
     if debug:
         continous_features = continous_features[:debug_length]
         categorical_features = categorical_features[:debug_length]
-    return continous_features, categorical_features
+    return continous_features, categorical_features, construct_continuous_features

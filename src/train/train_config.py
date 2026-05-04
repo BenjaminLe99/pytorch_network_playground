@@ -21,7 +21,7 @@ def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
         dataset_pattern = ["dy_*","tt_*","hh_ggf_hbb_htt_kl0_kt1*","hh_ggf_hbb_htt_kl1_kt1*","hh_ggf_hbb_htt_kl5*","hh_ggf_hbb_htt_kl2p45*"]
     print(f"Starting training with datasets:{dataset_pattern}")
 
-    continous_features, categorical_features = input_features(debug=False, debug_length=3)
+    continous_features, categorical_features, construct_continuous_features = input_features(debug=False, debug_length=3)
     eras = []
     
     if '22pre' in eras_list:
@@ -54,6 +54,7 @@ def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
     dataset_config = {
         "continous_features" : continous_features,
         "categorical_features": categorical_features,
+        "contruct_continuous_features": construct_continuous_features,
         "eras" : eras,
         "datasets" : datasets,
         "cuts" : "(vbf_dnn_moe_hh_vbf < 0.5)",

@@ -251,12 +251,17 @@ def get_data(config, _save_cache = True, overwrite=False):
             file_type = "root",
             columns = cont_feat + cat_feat
         )
+        
         # conver data in {pid : {cont:arr, cat: arr, weight: arr, target: arr}}
         events = convert_numpy_to_torch(
             events=events,
             continous_features=cont_feat,
             categorical_features=cat_feat,
         )
+
+        # construct additional features if desired.
+        events = construct_additional_features(events, config)
+
         logger.info("Done loading data")
         # save events in cache
         if _save_cache:
@@ -265,6 +270,22 @@ def get_data(config, _save_cache = True, overwrite=False):
             except:
                 from IPython import embed; embed(header="Saving Cache did not work out - going debugging to manually save \'events\' with \'cacher.save_cache\'")
     return events
+
+def construct_additional_features(events, config):
+
+    # construct mhh
+    if "htthbb_mass" in config["contruct_continuous_features"]:
+        print("constructing mhh continuous feature.")
+        for key, value in events.items():
+            hh_e = value['continous'][:,41]
+            hh_px = value['continous'][:,42]
+            hh_py = value['continous'][:,43]
+            hh_pz = value['continous'][:,44]
+            mhh = torch.sqrt(hh_e**2 - hh_px**2 - hh_py**2 - hh_pz**2).unsqueeze(1)
+            events[key]['continous'] = torch.cat((events[key]['continous'],mhh), dim=1)
+
+    return events
+
 
 def convert_numpy_to_torch(events, continous_features, categorical_features, dtype=None):
     def numpy_to_torch(array, columns, dtype):

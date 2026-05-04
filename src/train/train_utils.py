@@ -33,8 +33,8 @@ def training_default(model, loss_fn, optimizer, target_map, strength_param, only
         kl_logits = logits[:,start_idx:end_idx]
 
         # calculate the loss for background vs signal and kappa lambda vs kappa lambda
-        group_loss, *other_group_losses = loss_fn(logits, group_targets, start_idx=start_idx, end_idx=end_idx)
-        kl_loss, *other_kl_losses = loss_fn(kl_logits, kl_targets)
+        group_loss, *other_group_losses = loss_fn(logits, group_targets, cont_input=cont, start_idx=start_idx, end_idx=end_idx)
+        kl_loss, *other_kl_losses = loss_fn(kl_logits, kl_targets, cont_input=cont)
 
         # safely extract dicts incase None was passed in the loss components dict.
         dict_group = other_group_losses[0] if other_group_losses else {}
@@ -44,7 +44,7 @@ def training_default(model, loss_fn, optimizer, target_map, strength_param, only
 
         loss = group_loss + (strength_param * kl_loss)
     elif 'hh' in target_map or only_one_weightmatrix == True:
-        loss, *other_losses = loss_fn(logits, targets)
+        loss, *other_losses = loss_fn(logits, targets, cont_input=cont)
 
     loss.backward()
 
@@ -115,8 +115,8 @@ def validation_default(model, loss_fn, target_map, strength_param, only_one_weig
                     kl_logits = logits[:,start_idx:end_idx]
 
                     # calculate the loss for background vs signal and kappa lambda vs kappa lambda
-                    group_loss, *other_group_losses = loss_fn(logits, group_targets, start_idx=start_idx, end_idx=end_idx)
-                    kl_loss, *other_kl_losses = loss_fn(kl_logits, kl_targets)
+                    group_loss, *other_group_losses = loss_fn(logits, group_targets, cont_input=cont, start_idx=start_idx, end_idx=end_idx)
+                    kl_loss, *other_kl_losses = loss_fn(kl_logits, kl_targets, cont_input=cont)
 
                     dict_group = other_group_losses[0] if other_group_losses else {}
                     dict_kl = other_kl_losses[0] if other_kl_losses else {}
@@ -124,7 +124,7 @@ def validation_default(model, loss_fn, target_map, strength_param, only_one_weig
                     other_losses = [dict_group | dict_kl]
                     loss = (strength_param * group_loss) + kl_loss
                 elif 'hh' in target_map or only_one_weightmatrix == True:
-                    loss, *other_losses = loss_fn(logits, tar)
+                    loss, *other_losses = loss_fn(logits, tar, cont_input=cont)
                 dataset_losses.append(loss)
                 
                 if other_losses:
@@ -223,27 +223,3 @@ def log_metrics(tensorboard_inst, iteration_step, sampler_output, target_map, mo
 
 training_fn = functions.get(f"training_{train_config.config['training_fn']}")
 validation_fn = functions.get(f"validation_{train_config.config['validation_fn']}")
-
-def matrix_normalization(matrix, normalization):
-    if normalization == 'global_sum':
-        total_sum = torch.sum(torch.abs(matrix))            
-        if total_sum == 0:
-            matrix = matrix
-            print(matrix)
-        else:
-            matrix = matrix / total_sum
-            print(matrix / total_sum)
-
-    elif normalization == 'max_norm':
-        max_val = torch.max(torch.abs(matrix))            
-        if max_val == 0:
-            matrix = matrix
-            print(matrix)
-        else:
-            matrix = matrix / max_val
-            print(matrix / max_val)
-
-    elif normalization == 'none':
-        print(matrix)
-
-    return matrix

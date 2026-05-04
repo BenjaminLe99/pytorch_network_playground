@@ -162,16 +162,27 @@ class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
     Off-diagonal entries give weights to False-class log loss terms log(1-p), adding additional penalties for high false class prediction scores.
     Takes logits as inputs.
     """
-    def __init__(self, weight_matrix_A, weight_matrix_B, normalization="none", loss_components_dict=None, device=None, **kwargs):
+    def __init__(self, weight_matrix_A, weight_matrix_B, normalization="none", mhh_weights=(1.0,1.0), loss_components_dict=None, device=None, **kwargs):
         super(WeightedFalseClassPenaltyLogLoss, self).__init__()
-        self.weight_matrix_A = weight_matrix_A
-        self.weight_matrix_B = weight_matrix_B
+
+        print("signal vs. background matrix:")
+        print(weight_matrix_A)
+        print("kappa lambda vs. kappa lambda matrix:")
+        print(weight_matrix_B)
+
         self.normalization = normalization
+
+        print("normalized matrices:")
+        self.weight_matrix_A = self.normalize_weight_matrix(weight_matrix_A)
+        self.weight_matrix_B = self.normalize_weight_matrix(weight_matrix_B)
+
         self.loss_components_dict = loss_components_dict # dict containing various combinations of loss components of the weight matrix one wants to calculate in addition.
         self.device = device
+        self.mhh_max, self.mhh_min = mhh_weights
 
     def forward(self, logits, targets, **kwargs):
         # calculate main loss
+        self.mhh_weight(**kwargs)
         logits = self.align_logits_to_targets(logits, targets, **kwargs)
         loss = self.calculate_loss(logits, targets, **kwargs)
 
@@ -182,28 +193,62 @@ class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
 
         return (loss,)
     
-    def normalize_weight_matrix(self):
+    def mhh_weight(self, **kwargs):
+        continuous_features = kwargs.get('cont_input')
+        mhh = torch.sqrt(continuous_features[:,41]**2 - continuous_features[:,42]**2 - continuous_features[:,43]**2 - continuous_features[:,44]**2).unsqueeze(1)
+        self.mhh_weights = self.get_piecewise_weights(mhh, self.mhh_max, self.mhh_min)
+
+    
+    def get_piecewise_weights(self, mhh_value, max_weight, min_weight):
+        """
+        Applies piecewise weighting:
+        - x <= 350: max_weight
+        - 350 < x < 500: linear transition
+        - x >= 500: min_weight
+        """
+        # 1. Constant high weight for the start
+        weights = torch.full_like(mhh_value, max_weight)
+        
+        # 2. Linear interpolation for the middle section (350 to 500)
+        # Formula: high - (dist_from_350 / total_range) * (high - low)
+        mid_mask = (mhh_value > 350) & (mhh_value < 500)
+        linear_step = (mhh_value - 350) / (500 - 350)
+        weights = torch.where(mid_mask, max_weight - (linear_step * (max_weight - min_weight)), weights)
+        
+        # 3. Constant low weight for everything 500 and above
+        weights = torch.where(mhh_value >= 500, torch.tensor(min_weight).to(mhh_value.device), weights)
+        return weights
+    
+    def normalize_weight_matrix(self, matrix):
+        # sum of all elements in the entire matrix
         if self.normalization == 'global_sum':
-        # Sum of all elements in the entire matrix
-            total_sum = torch.sum(torch.abs(self.weight_matrix))            
+            total_sum = torch.sum(torch.abs(matrix))            
             if total_sum == 0:
-                self.weight_matrix = self.weight_matrix
+                matrix = matrix
+                print(matrix)
             else:
-                self.weight_matrix = self.weight_matrix / total_sum
+                matrix = matrix / total_sum
+                print(matrix)
         
+        # divide all elements by the largest entry in the matrix
         elif self.normalization == 'max_norm':
-            # Divide all elements by the maximum value found in the matrix
-            max_val = torch.max(torch.abs(self.weight_matrix))
+            max_val = torch.max(torch.abs(matrix))
             if max_val == 0:
-                self.weight_matrix = self.weight_matrix
+                matrix = matrix
+                print(matrix)
             else:
-                self.weight_matrix = self.weight_matrix / max_val
-        
+                matrix = matrix / max_val
+                print(matrix)
+
+        # no normalization
         elif self.normalization == 'none':
-            self.weight_matrix = self.weight_matrix
+            matrix = matrix
+            print(matrix)
             
         else:
             raise ValueError("normalization must be 'global_sum', 'max_norm' or 'none'")
+        
+        return matrix
     
     def align_logits_to_targets(self, logits, targets, **kwargs):
 
@@ -223,10 +268,8 @@ class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
         start_idx = kwargs.get('start_idx')
         if start_idx or self.weight_matrix_B is None:
             weight_matrix = self.weight_matrix_A
-            self.weight_matrix = weight_matrix
         else:
             weight_matrix = self.weight_matrix_B
-            self.weight_matrix = weight_matrix
 
         # calculate log losses
         true_class_log_prob = self.true_class_log_probabilities(logits)
@@ -243,14 +286,14 @@ class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
         #     print("Inf detected in false_class_log_prob!")
 
         # pick out the row of the class
-        weight_rows = targets @ self.weight_matrix 
+        weight_rows = targets @ weight_matrix 
 
         # calculate loss of target class
-        true_class_loss = (targets * weight_rows * true_class_log_prob).sum(dim=1)  # batch of only target loss
+        true_class_loss = (targets * self.mhh_weights * weight_rows * true_class_log_prob).sum(dim=1)  # batch of only target loss
 
         # calculate loss of false classes
-        false_classes_mask = 1 - targets  # 1 where not true class
-        false_class_loss = (false_classes_mask * weight_rows * false_class_log_prob).sum(dim=1) # batch of false classes loss
+        false_classes_mask = (1 - targets)  # 1 where not true class
+        false_class_loss = (false_classes_mask * self.mhh_weights * weight_rows * false_class_log_prob).sum(dim=1) # batch of false classes loss
 
         # add loss penalties
         loss_per_sample = -(true_class_loss + false_class_loss)
