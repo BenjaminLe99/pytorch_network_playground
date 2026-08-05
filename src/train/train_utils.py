@@ -2,6 +2,7 @@ import torch
 import plotting
 import metrics
 import train_config
+import math
 
 functions = {}
 
@@ -223,3 +224,29 @@ def log_metrics(tensorboard_inst, iteration_step, sampler_output, target_map, mo
 
 training_fn = functions.get(f"training_{train_config.config['training_fn']}")
 validation_fn = functions.get(f"validation_{train_config.config['validation_fn']}")
+
+def validation_frequency(iteration, max_iteration):
+    """Returns how often to validate based on current progress."""
+    progress = iteration / max_iteration
+    
+    if progress < 0.5:
+        return 10000
+    elif progress < 0.8:
+        return 5000
+    else:
+        return 500
+    
+def lr_multiplier(iteration, warmup_max, max_iterations, max_lr, min_lr):
+    """Calculates the multiplier for the learning rate."""
+    if iteration < warmup_max:
+        # Linear Warmup
+        return float(iteration) / float(max(1, warmup_max))
+    
+    # Cosine Annealing
+    progress = float(iteration - warmup_max) / float(max(1, max_iterations - warmup_max))
+    cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+    
+    # Scale between MAX_LR and MIN_LR
+    # Note: LambdaLR multiplies the base_lr. We want (base_lr * decay) to stay above MIN_LR.
+    lr_range = (max_lr - min_lr) / max_lr
+    return (lr_range * cosine_decay) + (min_lr / max_lr)

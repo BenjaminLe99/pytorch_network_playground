@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
+import hashlib
+import json
+import os
+from typing import Any, Dict, Tuple, Union
 
 from copy import deepcopy
 
@@ -241,3 +245,85 @@ class CategoricalTokenizer(torch.nn.Module):
         self.min = self.min.to(*args, **kwargs)
         self.indices = self.indices.to(*args, **kwargs)
         return super().to(*args, **kwargs)
+
+def register_model(
+    args: Union[Dict[str, Any], Any],
+    base_config: Dict[str, Any] = None,
+    registry_path: str = "/data/dust/user/lebenjam/Master/dnn/model_registry.json",
+    runtime_keys: set = None,
+) -> Tuple[str, str]:
+    """
+    Merges base config with CLI args, generates a deterministic hash,
+    appends '__hash' to the model name, and updates the registry file.
+
+    Returns:
+        Tuple[str, str]: (hashed_model_name, config_hash)
+    """
+    # Accept either argparse Namespace or dictionary
+    cli_args = vars(args) if hasattr(args, "__dict__") else args
+
+    if base_config is None:
+        base_config = {}
+
+    if runtime_keys is None:
+        runtime_keys = {
+            "modelname",
+            "tbdestination",
+            "disable_checkpoints",
+            "disable_tensorboard",
+            "lr_range_test",
+        }
+        extra_keys = {
+            "sample_ratio",
+        }
+
+    # 1. Merge base config and CLI args (excluding runtime keys & unpassed args)
+    model_config = base_config.copy()
+    for k, v in cli_args.items():
+        if k not in runtime_keys | extra_keys and v is not None:
+            model_config[k] = v
+
+    # 2. Generate Hash
+    serialized = json.dumps(model_config, sort_keys=True, default=str)
+    config_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:8]
+
+    # 3. Concatenate Hash to Model Name
+    base_model_name = cli_args.get("modelname", "model")
+    hashed_model_name = f"{base_model_name}__{config_hash}"
+
+    # 4. Extract Weight Matrices
+    wm_A = cli_args.get("weightmatrix_A") if cli_args.get("weightmatrix_A") is not None else cli_args.get("diag_A")
+    wm_B = cli_args.get("weightmatrix_B") if cli_args.get("weightmatrix_B") is not None else cli_args.get("diag_B")
+    matrices_value = [wm_A, wm_B]
+
+    # 5. Collision Check & Registry Save
+    if os.path.exists(registry_path):
+        with open(registry_path, "r") as f:
+            registry = json.load(f)
+    else:
+        registry = {}
+
+    force_overwrite = cli_args.get("force_overwrite", False)
+
+    if config_hash in registry:
+        existing_val = registry[config_hash]
+        if existing_val == matrices_value:
+            print(f"[-] Info: Registry key '{config_hash}' exists with identical matrices. Skipping duplicate write.")
+        elif not force_overwrite:
+            raise ValueError(
+                f"[!] Registry Conflict: Key '{config_hash}' already exists with different matrices!\n"
+                f"    Existing:  {existing_val}\n"
+                f"    Attempted: {matrices_value}\n"
+                f"    Use --force_overwrite to override."
+            )
+        else:
+            print(f"[!] Warning: Overwriting entry for '{config_hash}' due to --force_overwrite.")
+
+    registry[config_hash] = matrices_value
+    with open(registry_path, "w") as f:
+        json.dump(registry, f, indent=2)
+
+    print(f"[+] Hashed Filename : {hashed_model_name}")
+    print(f"[+] Config Hash     : {config_hash}")
+
+    return hashed_model_name, config_hash

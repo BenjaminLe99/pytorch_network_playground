@@ -77,7 +77,6 @@ model_building_config = {
 }
 
 config = {
-    "max_train_iteration" : 100000000,
     "verbose_interval" : 25,
     "validation_interval" : 500,
     "gamma":0.5,
@@ -96,8 +95,6 @@ config = {
     "load_marcel_weights" : False,
     "training_fn" : "default", # chooses the training function
     "validation_fn" : "default",
-    "warmup_start_factor": 0.0001,
-    "warmup_iterations": 0
 }
 
 scheduler_config = {

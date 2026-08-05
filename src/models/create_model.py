@@ -305,6 +305,6 @@ class AddActFnToModel(torch.nn.Module):
             raise AttributeError(f"Object has no attribute '{attr}'")
 
     def forward(self, categorical_inputs, continuous_inputs):
-        x,_ = self.model(categorical_inputs, continuous_inputs)
+        x = self.model(categorical_inputs, continuous_inputs)
         x = self.act_func(x)
         return x

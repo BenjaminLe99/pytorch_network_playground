@@ -176,7 +176,8 @@ class WeightedFalseClassPenaltyLogLoss(torch.nn.Module):
         self.weight_matrix_A = self.normalize_weight_matrix(weight_matrix_A)
         self.weight_matrix_B = self.normalize_weight_matrix(weight_matrix_B)
 
-        self.loss_components_dict = loss_components_dict # dict containing various combinations of loss components of the weight matrix one wants to calculate in addition.
+        # dict containing various combinations of loss components of the weight matrix one wants to calculate in addition.
+        self.loss_components_dict = loss_components_dict 
         self.device = device
         self.mhh_max, self.mhh_min = mhh_weights
 

@@ -3,7 +3,7 @@
 
 pyenv_activate ()
 {
-    export PYENV_ROOT="/afs/desy.de/user/w/wiedersb/.pyenv/";
+    export PYENV_ROOT="/data/dust/user/lebenjam/pyenv";
     export PATH="${PYENV_ROOT}/bin/:${PATH}";
     eval "$(pyenv init --path)";
     eval "$(pyenv init -)";
