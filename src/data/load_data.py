@@ -108,8 +108,8 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
         "((channel_id == 1) | (channel_id == 2) | (channel_id == 3))",
     ]
 
-    if isinstance(cut, str):
-        cut = [cut]
+    if all(isinstance(item, str) for item in cut):
+        cut = cut
     if cut is None:
         cut = []
     cuts = baseline_cuts + cut
@@ -251,7 +251,7 @@ def get_data(config, _save_cache = True, overwrite=False):
             file_type = "root",
             columns = cont_feat + cat_feat
         )
-        
+
         # conver data in {pid : {cont:arr, cat: arr, weight: arr, target: arr}}
         events = convert_numpy_to_torch(
             events=events,

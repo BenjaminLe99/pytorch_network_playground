@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 
 # project imports
 from models import create_model
@@ -20,7 +21,7 @@ import optimizer
 from train_config import (
     config, get_dataset_config, model_building_config, optimizer_config, scheduler_config, extra_losses
 )
-from train_utils import training_fn, validation_fn, log_metrics, lr_multiplier, validation_frequency
+from train_utils import training_fn, validation_fn, log_metrics, lr_multiplier, validation_frequency, update_ema_batchnorm
 from early_stopping import EarlyStopSignal, EarlyStopOnPlateau
 from export import torch_save, torch_export_v2
 import marcel_weight_translation as mwt
@@ -144,6 +145,12 @@ if __name__ == '__main__':
         help="maximum and minimum event weight based on the events mhh value."
     )
 
+    parser.add_argument(
+        "--exponential-moving-average",
+        action="store_true",
+        help="enable exponential moving average."
+    )
+
     wm_A_group = parser.add_mutually_exclusive_group(required=True)
 
     wm_A_group.add_argument(
@@ -198,8 +205,6 @@ if __name__ == '__main__':
 
     config['save_model_name'] = hashed_model_name
 
-    import pdb; pdb.set_trace()
-
     # dataprep
     dataset_config = get_dataset_config(args.datasets, args.eras)
     target_map = dataset_config['target_map']
@@ -224,6 +229,9 @@ if __name__ == '__main__':
     scheduler = args.scheduler
     warmup_max = args.warmup_max
     max_iterations = args.max_iterations
+
+    # exponential moving average
+    ema = args.exponential_moving_average
 
     logger = get_logger(__name__)
 
@@ -318,6 +326,14 @@ if __name__ == '__main__':
 
         # load means from marcel if activated
         model = mwt.load_marcels_weights(model, continous_features=dataset_config["continous_features"], with_std=config["load_marcel_stats"], with_weights=config["load_marcel_weights"])
+
+        if ema:
+            ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(0.999))
+            v_model = ema_model
+
+        else:
+            v_model = model
+            ema_model = None
 
         if scheduler == 'plateau':
             optimizer_config['lr'] = lr
@@ -461,6 +477,7 @@ if __name__ == '__main__':
         for current_iteration in range(max_iterations):
             t_loss, (t_pred, t_targets), *t_other_loss = training_fn(
                 model = model,
+                ema_model = ema_model,
                 loss_fn = loss_fn,
                 optimizer = optimizer_inst,
                 target_map = target_map,
@@ -497,7 +514,11 @@ if __name__ == '__main__':
             if (current_iteration % val_frequency(current_iteration) == 0) and current_iteration != 0:
                 # evaluation of training data
                 print(f"Running evaluation of training data at iteration {current_iteration}...")
-                eval_t_loss, (eval_t_pred, eval_t_tar, eval_t_weights), *eval_t_other_loss = validation_fn(model,
+
+                if ema_model:
+                    update_ema_batchnorm(ema_model, training_sampler, device=DEVICE, num_batches=30)
+
+                eval_t_loss, (eval_t_pred, eval_t_tar, eval_t_weights), *eval_t_other_loss = validation_fn(v_model,
                                                                                                            loss_fn,
                                                                                                            target_map,
                                                                                                            strength_param,
@@ -524,12 +545,12 @@ if __name__ == '__main__':
                         other_loss = eval_t_other_loss,
                         lr = optimizer_inst.param_groups[0]["lr"],
                         sampler = training_sampler,
-                        model = model
+                        model = v_model
                     )
                 print(f"Running evaluation of validation data at iteration {current_iteration}...")
 
                 # evaluation of validation
-                eval_v_loss, (eval_v_pred, eval_v_tar, eval_v_weights), *eval_v_other_loss = validation_fn(model,
+                eval_v_loss, (eval_v_pred, eval_v_tar, eval_v_weights), *eval_v_other_loss = validation_fn(v_model,
                                                                                                            loss_fn,
                                                                                                            target_map,
                                                                                                            strength_param,
@@ -568,21 +589,21 @@ if __name__ == '__main__':
                     if checkpoint_disabled == False:
                         if previous_lr > optimizer_inst.param_groups[0]['lr']:
                             print("validation did not improve for 10 validations, restoring weights of best validation and reducing learning rate.")
-                            model.load_state_dict(model_checkpoint["model_state"])
+                            v_model.load_state_dict(model_checkpoint["model_state"])
                             optimizer_inst.load_state_dict(model_checkpoint["optimizer_state"])
                             for g in optimizer_inst.param_groups:
                                 g['lr'] = new_lr
 
                 ### early stopping
                 # when val loss is lowest over a period of patience
-                if early_stopper_inst(eval_v_loss, model):
+                if early_stopper_inst(eval_v_loss, v_model):
                     logger.info(f"saving current best model at iteration {current_iteration} with loss {eval_v_loss:.5f}")
-                    torch_save(model, config["save_model_name"], current_fold)
+                    torch_save(v_model, config["save_model_name"], current_fold)
 
                     # make a checkpoint for the best model and optimizer states
                     if checkpoint_disabled == False:
                         model_checkpoint = {
-                            "model_state": model.state_dict(),
+                            "model_state": v_model.state_dict(),
                             "optimizer_state": optimizer_inst.state_dict(),
                         }
                         print("Checkpoint created/updated.")
@@ -600,6 +621,7 @@ if __name__ == '__main__':
                     else:
                         print("validation loss has not improved for 20 validations. Stopping training.")
                         print(config['save_model_name'])
+                        print(f"model hash: {hashed_model_name}")
                         break
 
                     # TODO release DATA from previous RUN

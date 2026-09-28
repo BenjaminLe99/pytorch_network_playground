@@ -23,7 +23,7 @@ def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
 
     continous_features, categorical_features, construct_continuous_features = input_features(debug=False, debug_length=3)
     eras = []
-    
+
     if '22pre' in eras_list:
         eras += ['22pre']
     if '22post' in eras_list:
@@ -38,7 +38,7 @@ def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
     print(f'Eras: {eras}')
 
     datasets =  find_datasets(dataset_pattern, eras, "root", verbose=False)
-    
+
     # hh case for going back and comparing
     target_list = []
     if 'hh' not in pattern_list:
@@ -49,7 +49,7 @@ def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
     # define the target map depending on what kappa lambda datasets you use
     target_map = {cls: idx for idx, cls in enumerate(target_list)}
     print(f"target map: {target_map}")
-    
+
     # changes in this dictionary will create a NEW hash of the data
     dataset_config = {
         "continous_features" : continous_features,
@@ -57,7 +57,7 @@ def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
         "contruct_continuous_features": construct_continuous_features,
         "eras" : eras,
         "datasets" : datasets,
-        "cuts" : "(vbf_dnn_moe_hh_vbf < 0.5)",
+        "cuts" : ["(vbf_dnn_moe_hh_vbf < 0.5)", "(abs(reg_dnn_moe_vis_tau1_charge) == 1)", "(abs(reg_dnn_moe_vis_tau2_charge) == 1)"],
         "target_map": target_map,
     }
     return dataset_config

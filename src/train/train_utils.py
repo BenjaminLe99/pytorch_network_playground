@@ -12,7 +12,7 @@ def register(fn):
     return fn
 
 @register
-def training_default(model, loss_fn, optimizer, target_map, strength_param, only_one_weightmatrix, sampler, device):
+def training_default(model, ema_model, loss_fn, optimizer, target_map, strength_param, only_one_weightmatrix, sampler, device):
     optimizer.zero_grad()
 
     cont, cat, targets = sampler.sample_batch(device=device)
@@ -28,7 +28,7 @@ def training_default(model, loss_fn, optimizer, target_map, strength_param, only
         bg_targets = targets[:,:start_idx]
         sig_targets = targets[:,start_idx:end_idx].sum(dim=1, keepdim=True)
         group_targets = torch.cat([bg_targets,sig_targets], dim=1)
-        
+
         # prep for kappa lambda vs kappa lambda loss
         kl_targets = targets[:,start_idx:end_idx]
         kl_logits = logits[:,start_idx:end_idx]
@@ -53,8 +53,11 @@ def training_default(model, loss_fn, optimizer, target_map, strength_param, only
         if p.grad is not None and not torch.isfinite(p.grad).all():
             print("BAD GRAD:", name)
             from IPython import embed;embed(header=" string - 26 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/train_utils.py")
-    
+
     optimizer.step()
+
+    if ema_model:
+        ema_model.update_parameters(model)
 
     if other_losses:
         return loss, (logits, targets), other_losses
@@ -99,7 +102,7 @@ def validation_default(model, loss_fn, target_map, strength_param, only_one_weig
             other_dataset_losses = {}
             for cont, cat, tar in validation_batch_generator:
                 logits = model(categorical_inputs=cat, continuous_inputs=cont)
-                
+
                 if 'hh' not in target_map and only_one_weightmatrix == False:
                     # get indices for the kappa lambda classes
                     group_indices = [value for key, value in target_map.items() if key in ['kl0','kl1','kl2','kl5']]
@@ -110,7 +113,7 @@ def validation_default(model, loss_fn, target_map, strength_param, only_one_weig
                     bg_targets = tar[:,:start_idx]
                     sig_targets = tar[:,start_idx:end_idx].sum(dim=1, keepdim=True)
                     group_targets = torch.cat([bg_targets,sig_targets], dim=1)
-                    
+
                     # prep for kappa lambda vs kappa lambda loss
                     kl_targets = tar[:,start_idx:end_idx]
                     kl_logits = logits[:,start_idx:end_idx]
@@ -127,7 +130,7 @@ def validation_default(model, loss_fn, target_map, strength_param, only_one_weig
                 elif 'hh' in target_map or only_one_weightmatrix == True:
                     loss, *other_losses = loss_fn(logits, tar, cont_input=cont)
                 dataset_losses.append(loss)
-                
+
                 if other_losses:
                     for key, value in other_losses[0].items():
                         other_dataset_losses.setdefault(key, []).append(value)
@@ -137,10 +140,10 @@ def validation_default(model, loss_fn, target_map, strength_param, only_one_weig
                 truth.append(tar.cpu())
                 weights.append(torch.full(size=(logits.shape[0], 1), fill_value=sampler[uid].relative_weight).cpu())
             # create event based weight tensor for dataset
-            
+
             average_val = sum(dataset_losses) / len(dataset_losses) * sampler[uid].relative_weight
             val_loss.append(average_val)
-            
+
             if other_dataset_losses:
                 other_average_val = {}
                 for key, value in other_dataset_losses.items():
@@ -149,10 +152,10 @@ def validation_default(model, loss_fn, target_map, strength_param, only_one_weig
 
         final_validation_loss = sum(val_loss).cpu()#/ len(val_loss)
 
-        if other_val_losses:    
+        if other_val_losses:
             for key, value in other_val_losses.items():
                 other_val_losses[key] = sum(value).cpu()
-            
+
             model.train()
 
             truth = torch.concatenate(truth, dim=0)
@@ -228,25 +231,34 @@ validation_fn = functions.get(f"validation_{train_config.config['validation_fn']
 def validation_frequency(iteration, max_iteration):
     """Returns how often to validate based on current progress."""
     progress = iteration / max_iteration
-    
+
     if progress < 0.5:
         return 10000
     elif progress < 0.8:
         return 5000
     else:
         return 500
-    
+
 def lr_multiplier(iteration, warmup_max, max_iterations, max_lr, min_lr):
     """Calculates the multiplier for the learning rate."""
     if iteration < warmup_max:
         # Linear Warmup
         return float(iteration) / float(max(1, warmup_max))
-    
+
     # Cosine Annealing
     progress = float(iteration - warmup_max) / float(max(1, max_iterations - warmup_max))
     cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
-    
+
     # Scale between MAX_LR and MIN_LR
     # Note: LambdaLR multiplies the base_lr. We want (base_lr * decay) to stay above MIN_LR.
     lr_range = (max_lr - min_lr) / max_lr
     return (lr_range * cosine_decay) + (min_lr / max_lr)
+
+def update_ema_batchnorm(ema_model, sampler, device, num_batches=30):
+    ema_model.train() # Crucial: tells BatchNorm to update stats
+
+    with torch.no_grad():
+        for _ in range(num_batches):
+            batch_cont, batch_cat, _ = sampler.sample_batch(device=device, shuffle_batch=True)
+            # Dummy forward pass to update the statistics
+            _ = ema_model(batch_cont, batch_cat)
