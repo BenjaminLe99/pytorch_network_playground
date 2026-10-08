@@ -37,7 +37,7 @@ def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
 
     print(f'Eras: {eras}')
 
-    datasets =  find_datasets(dataset_pattern, eras, "root", verbose=False)
+    datasets = find_datasets(dataset_pattern, eras, "root", verbose=False)
 
     # hh case for going back and comparing
     target_list = []
@@ -57,7 +57,10 @@ def get_dataset_config(pattern_list: list, eras_list: list) -> dict:
         "contruct_continuous_features": construct_continuous_features,
         "eras" : eras,
         "datasets" : datasets,
-        "cuts" : ["(vbf_dnn_moe_hh_vbf < 0.5)", "(abs(reg_dnn_moe_vis_tau1_charge) == 1)", "(abs(reg_dnn_moe_vis_tau2_charge) == 1)"],
+        "cuts" : ["(reg_dnn_moe_vis_tau1_charge == 1) | (reg_dnn_moe_vis_tau1_charge == -1)",
+                  "(reg_dnn_moe_vis_tau2_charge == 1) | (reg_dnn_moe_vis_tau2_charge == -1)",
+                  "vbf_dnn_moe_hh_vbf < 0.5"
+                  ],
         "target_map": target_map,
     }
     return dataset_config
@@ -85,23 +88,24 @@ config = {
     "k_fold" : 5,
     "seed" : 1,
     "train_ratio" : 0.75,
-    "v_batch_size" : 2**17, # old batchsize: 4096*8 = 2**16
+    "v_batch_size" : 2**14, # old batchsize: 4096*8 = 2**16
     "t_batch_size" : 2**14, # old batchsize: 4096 = 2**13
     "min_events_in_batch": 1,
-    "early_stopping_patience" : 10, # marcel : 10
+    "early_stopping_patience" : 9, # marcel : 10
     "early_stopping_min_delta" : 0, # marcel : 0
     "get_batch_statistic_return_dummy" : False,
     "load_marcel_stats" : False,
     "load_marcel_weights" : False,
     "training_fn" : "default", # chooses the training function
     "validation_fn" : "default",
+    "ema_window_size": 0.998, # effective window size of the exponential moving average ~1000 = 0.999, ~500 = 0.998, ~100 = 0.99
 }
 
 scheduler_config = {
-    "patience" : 10 - 1, # marcel : 10, starts counting from 0
+    "patience" : 3 - 1, # marcel : 10, starts counting from 0
     "min_delta" : 0, # marcel : 0
     "threshold_mode" : "abs", # marcel : abs
-    "factor" : 0.5,
+    "factor" : 0.1,
 }
 
 optimizer_config = {

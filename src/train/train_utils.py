@@ -3,6 +3,24 @@ import plotting
 import metrics
 import train_config
 import math
+from contextlib import contextmanager
+import time
+
+TIMING_ENABLED = True
+
+@contextmanager
+def time_block(name):
+    if not TIMING_ENABLED:
+        yield  # Passes right through without timing
+        return
+
+    start = time.perf_counter()
+    yield
+    elapsed = time.perf_counter() - start
+    print(f"\n--- TIMING REPORT ---")
+    print(f"Block : {name}")
+    print(f"Time  : {elapsed:.4f} seconds")
+    print(f"-----------------------\n")
 
 functions = {}
 
@@ -171,48 +189,57 @@ def validation_default(model, loss_fn, target_map, strength_param, only_one_weig
         return final_validation_loss, (predictions, truth, weights)
 
 
-def log_metrics(tensorboard_inst, iteration_step, sampler_output, target_map, mode="train", **data):
+def log_metrics(tensorboard_inst, iteration_step, sampler_output, target_map, metric_logging, mode="train", **data):
     # general logging
-    if (loss := data.get("loss")) is not None:
-        tensorboard_inst.log_loss({mode: loss}, step=iteration_step)
+    if "loss" in metric_logging and (loss := data.get("loss")) is not None:
+        with time_block("loss"):
+            tensorboard_inst.log_loss({mode: loss}, step=iteration_step)
 
-    if (other_loss := data.get("other_loss")):
-        for key, value in other_loss[0].items():
-            tensorboard_inst.log_loss({key: value.item()}, step=iteration_step)
+    if "other_loss" in metric_logging and (other_loss := data.get("other_loss")):
+        with time_block("other loss"):
+            for key, value in other_loss[0].items():
+                tensorboard_inst.log_loss({key: value.item()}, step=iteration_step)
 
-    if (lr := data.get("lr")) is not None:
-        tensorboard_inst.log_lr(lr, step=iteration_step)
+    if "lr" in metric_logging and (lr := data.get("lr")) is not None:
+        with time_block("lr"):
+            tensorboard_inst.log_lr(lr, step=iteration_step)
 
     pred, tar, weights = sampler_output
 
     if float(torch.sum(torch.isnan(pred)).detach()) > 0:
         from IPython import embed;embed(header=" string - 98 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/train_utils.py")
 
-    # network prediction plot
-    pred_fig, pred_ax = plotting.network_predictions(
-        tar,
-        pred,
-        target_map
-    )
-    tensorboard_inst.log_figure(f"{mode} node output", pred_fig, step=iteration_step)
+    # network prediction plotting"):
+    if "prediction" in metric_logging:
+        with time_block("prediction"):
+            pred_fig, pred_ax = plotting.network_predictions(
+                tar,
+                pred,
+                target_map
+            )
+            tensorboard_inst.log_figure(f"{mode} node output", pred_fig, step=iteration_step)
 
-    # confusion matrix plot
-    c_mat_fig, c_mat_ax, c_mat = plotting.confusion_matrix(
-        tar,
-        pred,
-        target_map,
-        sample_weight=weights,
-        normalized="true"
-    )
-    tensorboard_inst.log_figure(f"{mode} confusion matrix", c_mat_fig, step=iteration_step)
+    # confusion matrix plotx plotting"):
+    if "confusion" in metric_logging:
+        with time_block("confusion"):
+            c_mat_fig, c_mat_ax, c_mat = plotting.confusion_matrix(
+                tar,
+                pred,
+                target_map,
+                sample_weight=weights,
+                normalized="true"
+            )
+            tensorboard_inst.log_figure(f"{mode} confusion matrix", c_mat_fig, step=iteration_step)
 
-    roc_fig, roc_ax = plotting.roc_curve(
-        tar,
-        pred,
-        sample_weight=weights,
-        labels=list(target_map.keys())
-    )
-    tensorboard_inst.log_figure(f"{mode} roc curve one vs rest", roc_fig, step=iteration_step)
+    if "roc" in metric_logging:
+        with time_block("ROC"):
+            roc_fig, roc_ax = plotting.roc_curve(
+                tar,
+                pred,
+                sample_weight=weights,
+                labels=list(target_map.keys())
+            )
+            tensorboard_inst.log_figure(f"{mode} roc curve one vs rest", roc_fig, step=iteration_step)
 
     # TODO: metrics calculation
     _metrics = metrics.calculate_metrics(
@@ -221,9 +248,12 @@ def log_metrics(tensorboard_inst, iteration_step, sampler_output, target_map, mo
         label=list(target_map.keys()),
         weights=weights,
     )
-
-    tensorboard_inst.log_precision(_metrics, step=iteration_step, mode=mode)
-    tensorboard_inst.log_sensitivity(_metrics, step=iteration_step, mode=mode)
+    if "precision" in metric_logging:
+        with time_block("precision"):
+            tensorboard_inst.log_precision(_metrics, step=iteration_step, mode=mode)
+    if "sensitivity" in metric_logging:
+        with time_block("sensitivity"):
+            tensorboard_inst.log_sensitivity(_metrics, step=iteration_step, mode=mode)
 
 training_fn = functions.get(f"training_{train_config.config['training_fn']}")
 validation_fn = functions.get(f"validation_{train_config.config['validation_fn']}")
@@ -233,9 +263,9 @@ def validation_frequency(iteration, max_iteration):
     progress = iteration / max_iteration
 
     if progress < 0.5:
-        return 10000
+        return 500
     elif progress < 0.8:
-        return 5000
+        return 500
     else:
         return 500
 
@@ -261,4 +291,11 @@ def update_ema_batchnorm(ema_model, sampler, device, num_batches=30):
         for _ in range(num_batches):
             batch_cont, batch_cat, _ = sampler.sample_batch(device=device, shuffle_batch=True)
             # Dummy forward pass to update the statistics
-            _ = ema_model(batch_cont, batch_cat)
+            _ = ema_model(batch_cat, batch_cont)
+
+class EMAMultiAvgFn:
+    def __init__(self, decay=0.998):
+        self.decay = decay
+
+    def __call__(self, averaged_param, current_param, num_averaged):
+        return self.decay * averaged_param + (1.0 - self.decay) * current_param

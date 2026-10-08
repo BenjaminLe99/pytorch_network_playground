@@ -98,14 +98,13 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
     #   normalization_weight -> used as sample weight for batch
     #   tau2_isolated, lepton_os, channel_id -> used for baseline cut
     #   event -> event number used for k-fold splitting
-    meta_fields = {"process_id", "normalization_weight", "tau2_isolated", "leptons_os", "channel_id", "event"}
+    meta_fields = {"process_id", "normalization_weight", "num_taus_iso", "leptons_os", "channel_id", "event"}
     branches = set(branches).union(meta_fields)
 
     # handle baseline combine with additional cuts
     baseline_cuts = [
-        "(tau2_isolated == 1)",
         "(leptons_os == 1)",
-        "((channel_id == 1) | (channel_id == 2) | (channel_id == 3))",
+        "((channel_id == 1) & (num_taus_iso >= 1)) | ((channel_id == 2) & (num_taus_iso >= 1)) | ((channel_id == 3) & (num_taus_iso >= 2))",
     ]
 
     if all(isinstance(item, str) for item in cut):
@@ -113,6 +112,9 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
     if cut is None:
         cut = []
     cuts = baseline_cuts + cut
+
+    # make sure that every cut is wrapped in ()
+    cut_expression = " & ".join(f"({c})" for c in cuts)
 
     # load root files and combine the array to continogus arrays
     if isinstance(files_path, str):
@@ -122,7 +124,7 @@ def root_to_numpy(files_path: Union[list[str],str], branches: Union[list[str], s
         logger.info(f"loading: {file_path}")
         with uproot.open(file_path, object_cache=None, array_cache=None) as file:
             tree = file["events"]
-            arrays.append(tree.arrays(branches, library="ak", cut="&".join(cuts)).to_numpy())
+            arrays.append(tree.arrays(branches, library="ak", cut=cut_expression).to_numpy())
     return np.concatenate(arrays, axis=0)
 
 def parquet_to_awkward(files_path: Union[list[str],str], columns: Union[list[str], str, None]=None) -> ak.Array:

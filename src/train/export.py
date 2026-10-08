@@ -42,6 +42,10 @@ def torch_export(model, dst_path, input_tensors):
     torch.export.save(exp, p, pickle_protocol=4)
 
 def torch_export_v2(model, name, fold):
+
+    if hasattr(model, "module"):
+        model = model.module
+
     DEVICE=torch.device("cpu")
     model = AddActFnToModel(model, "softmax")
     model = model.to(DEVICE)

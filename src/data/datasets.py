@@ -251,7 +251,7 @@ class DatasetSampler(t_data.Sampler):
         # TODO BETTER SCHEME
         # remove remaining from biggest sample or add more to biggest sample
         floored_sizes[indices_above_threshold[0]] -= very_last_remaining
-        
+
         # if very_last_remaining <= -1:
         #     floored_sizes[indices_above_threshold[-1]] -= very_last_remaining
         # elif very_last_remaining >= 1:

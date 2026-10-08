@@ -314,7 +314,7 @@ def create_train_or_validation_sampler(events, target_map, sample_ratio, batch_s
     if not events:
         logger.warning(f"Sampler is not created due to feeding empty events")
         return None
-    
+
     if len(sample_ratio) != len(target_map):
         raise ValueError("sample ratio must have the same structure as target map")
 
