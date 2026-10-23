@@ -19,6 +19,9 @@ class Dataset(t_data.Dataset):
         self.continous_input = continous_tensor.to(torch.float32)
         self.categorical_input = categorical_tensor.to(torch.int32)
         self.targets = target.to(torch.float32)
+
+        self.device = self.continous_input.device
+
         self.weight = weight
         self.name = name
         self.randomize = randomize
@@ -37,12 +40,28 @@ class Dataset(t_data.Dataset):
     def __getitem__(self, idx):
         return self.continous_input[idx], self.continous_input[idx], self.targets[idx]
 
+    # def reset(self):
+    #     self.current_idx = 0
+    #     if self.randomize:
+    #         self.indices = torch.randperm(len(self))
+    #     else:
+    #         self.indices = torch.arange(len(self))
+
     def reset(self):
         self.current_idx = 0
         if self.randomize:
-            self.indices = torch.randperm(len(self))
+            perm = torch.randperm(len(self))           # CPU generator, as before
         else:
-            self.indices = torch.arange(len(self))
+            perm = torch.arange(len(self))
+        self.indices = perm.to(self.device)            # no-op while the data is on the CPU
+
+    def to(self, device):
+        self.continous_input = self.continous_input.to(device)
+        self.categorical_input = self.categorical_input.to(device)
+        self.targets = self.targets.to(device)
+        self.indices = self.indices.to(device)         # keeps permutation AND current_idx
+        self.device = self.continous_input.device
+        return self
 
     def sample(self, number=None):
         """
@@ -96,7 +115,10 @@ class Dataset(t_data.Dataset):
         # save current state of the sampler to restore after full iteration
         # HINT: Do not mix sample with batch generator, as both manipulate current_idx
         start_idx, next_idx = 0, 0
-        indices = torch.arange(len(self))
+
+        indices = torch.arange(len(self), device=self.device)
+
+        # indices = torch.arange(len(self))
         if batch_size is None:
             batch_size = len(self)
 
@@ -154,6 +176,12 @@ class DatasetSampler(t_data.Sampler):
         weight = dataset.weight
         self.total_weight[dataset.dataset_type] += weight
         self.dataset_inst[dataset.dataset_type][dataset.name] = dataset
+
+    def to(self, device):
+        for per_type in self.dataset_inst.values():
+            for ds in per_type.values():
+                ds.to(device)
+        return self
 
     @property
     def keys(self):
@@ -286,7 +314,12 @@ class DatasetSampler(t_data.Sampler):
 
         if shuffle_batch:
             # needs to be depending on data due to last incomplete batch
-            indices = torch.randperm(batch_cont.shape[0])
+            # indices = torch.randperm(batch_cont.shape[0])
+
+            indices = torch.randperm(batch_cont.shape[0])      # CPU generator, same draw as before
+            if batch_cont.is_cuda:
+                indices = indices.pin_memory().to(batch_cont.device, non_blocking=True)
+
             batch_cont = batch_cont[indices]
             batch_cat = batch_cat[indices]
             batch_target = batch_target[indices]

@@ -249,6 +249,7 @@ class CategoricalTokenizer(torch.nn.Module):
 def register_model(
     args: Union[Dict[str, Any], Any],
     base_config: Dict[str, Any] = None,
+    current_fold: int = None,
     registry_path: str = "/data/dust/user/lebenjam/Master/dnn/model_registry.json",
     runtime_keys: set = None,
 ) -> Tuple[str, str]:
@@ -272,6 +273,7 @@ def register_model(
             "disable_checkpoints",
             "disable_tensorboard",
             "lr_range_test",
+            "sampler_device"
         }
         extra_keys = {
             "sample_ratio",
@@ -289,7 +291,7 @@ def register_model(
 
     # 3. Concatenate Hash to Model Name
     base_model_name = cli_args.get("modelname", "model")
-    hashed_model_name = f"{base_model_name}__{config_hash}"
+    hashed_model_name = f"{base_model_name}_fold{current_fold}__{config_hash}"
 
     # 4. Extract Weight Matrices
     wm_A = cli_args.get("weightmatrix_A") if cli_args.get("weightmatrix_A") is not None else cli_args.get("diag_A")

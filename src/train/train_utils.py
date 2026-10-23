@@ -5,8 +5,10 @@ import train_config
 import math
 from contextlib import contextmanager
 import time
+import bisect
+from torch.optim.swa_utils import AveragedModel
 
-TIMING_ENABLED = True
+TIMING_ENABLED = False
 
 @contextmanager
 def time_block(name):
@@ -30,7 +32,7 @@ def register(fn):
     return fn
 
 @register
-def training_default(model, ema_model, loss_fn, optimizer, target_map, strength_param, only_one_weightmatrix, sampler, device):
+def training_default(model, ema_model, ema_adaptive_fn, loss_fn, optimizer, target_map, strength_param, only_one_weightmatrix, sampler, device):
     optimizer.zero_grad()
 
     cont, cat, targets = sampler.sample_batch(device=device)
@@ -67,14 +69,23 @@ def training_default(model, ema_model, loss_fn, optimizer, target_map, strength_
 
     loss.backward()
 
-    for name, p in model.named_parameters():
-        if p.grad is not None and not torch.isfinite(p.grad).all():
-            print("BAD GRAD:", name)
-            from IPython import embed;embed(header=" string - 26 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/train_utils.py")
+    # grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf"))  # fused norm, no real clipping
+    # if not torch.isfinite(grad_norm):  # one sync per step
+    #     for name, p in model.named_parameters():
+    #         if p.grad is not None and not torch.isfinite(p.grad).all():
+    #             print("BAD GRAD:", name)
+    #     raise RuntimeError("non-finite gradient")  # or embed() when running interactively
+
+    # for name, p in model.named_parameters():
+    #     if p.grad is not None and not torch.isfinite(p.grad).all():
+    #         print("BAD GRAD:", name)
+    #         from IPython import embed;embed(header=" string - 26 in /afs/desy.de/user/l/lebenjam/Master/neuralnetwork/src/train/train_utils.py")
 
     optimizer.step()
 
     if ema_model:
+        if ema_adaptive_fn:
+            ema_adaptive_fn.step_loss(loss)
         ema_model.update_parameters(model)
 
     if other_losses:
@@ -271,18 +282,20 @@ def validation_frequency(iteration, max_iteration):
 
 def lr_multiplier(iteration, warmup_max, max_iterations, max_lr, min_lr):
     """Calculates the multiplier for the learning rate."""
-    if iteration < warmup_max:
-        # Linear Warmup
-        return float(iteration) / float(max(1, warmup_max))
+    # The multiplier range we are scaling within
+    min_multiplier = min_lr / max_lr
+    multiplier_range = (max_lr - min_lr) / max_lr
 
-    # Cosine Annealing
+    if iteration < warmup_max:
+        # Linear Warmup: Scale from min_multiplier up to 1.0
+        progress = float(iteration) / float(max(1, warmup_max))
+        return min_multiplier + (progress * multiplier_range)
+
+    # Cosine Annealing: Scale from 1.0 down to min_multiplier
     progress = float(iteration - warmup_max) / float(max(1, max_iterations - warmup_max))
     cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
 
-    # Scale between MAX_LR and MIN_LR
-    # Note: LambdaLR multiplies the base_lr. We want (base_lr * decay) to stay above MIN_LR.
-    lr_range = (max_lr - min_lr) / max_lr
-    return (lr_range * cosine_decay) + (min_lr / max_lr)
+    return min_multiplier + (cosine_decay * multiplier_range)
 
 def update_ema_batchnorm(ema_model, sampler, device, num_batches=30):
     ema_model.train() # Crucial: tells BatchNorm to update stats
@@ -293,9 +306,111 @@ def update_ema_batchnorm(ema_model, sampler, device, num_batches=30):
             # Dummy forward pass to update the statistics
             _ = ema_model(batch_cat, batch_cont)
 
-class EMAMultiAvgFn:
+class EMAMultiAvgFn:                      # constant decay
     def __init__(self, decay=0.998):
         self.decay = decay
 
-    def __call__(self, averaged_param, current_param, num_averaged):
-        return self.decay * averaged_param + (1.0 - self.decay) * current_param
+    def get_window_size(self, step):
+        # Convert alpha back to effective window size N = 1 / (1 - alpha)
+        return 1.0 / (1.0 - self.decay)
+
+    def __call__(self, step):
+        return self.decay
+
+class InverseStepEMAFn:
+    def __init__(self, config):
+        self.target_window = config["ema_inverse_target"]
+        self.alpha_max = 1.0 - (1.0 / self.target_window)
+
+        c = config["ema_inverse_c"]
+        if isinstance(c, (int, float)):
+            knots = [(0, float(c))]  # constant c, same as before
+        else:
+            knots = [(int(s), float(v)) for s, v in c]
+        steps = [s for s, _ in knots]
+        assert steps == sorted(steps), "c knots must be sorted by step"
+        assert all(v > 1.0 for _, v in knots), "every c must be > 1"
+        self.c_steps = steps
+        self.c_vals = [v for _, v in knots]
+
+    def get_c(self, step):
+        # Linear interpolation between knots; constant outside the knot range
+        if step <= self.c_steps[0]:
+            return self.c_vals[0]
+        if step >= self.c_steps[-1]:
+            return self.c_vals[-1]
+        i = bisect.bisect_right(self.c_steps, step) - 1
+        s0, s1 = self.c_steps[i], self.c_steps[i + 1]
+        v0, v1 = self.c_vals[i], self.c_vals[i + 1]
+        return v0 + (v1 - v0) * (step - s0) / (s1 - s0)
+
+    def get_window_size(self, step):
+        if isinstance(step, torch.Tensor):
+            step = step
+
+        # Inverse step formula with step-dependent c: alpha = (1 + step) / (c(step) + step)
+        alpha = (1.0 + step) / (self.get_c(step) + step)
+        alpha = min(self.alpha_max, alpha)
+
+        # Convert alpha back to effective window size N = 1 / (1 - alpha)
+        return 1.0 / (1.0 - alpha)
+
+    def __call__(self, step):
+        return 1.0 - 1.0 / self.get_window_size(step)
+
+# Usage:
+# ema_model = AveragedModel(model, avg_fn=InverseStepEMAFn(target_window=2000.0))
+
+class PiecewiseEMAFn:
+    def __init__(self, config, total_steps):
+        self.phase1_steps = config["ema_schedule"][0]
+        self.phase1_size = config["ema_window_schedule"][0]
+        self.phase2_steps = config["ema_schedule"][1]
+        self.phase2_size = config["ema_window_schedule"][1]
+        self.total_steps = total_steps
+        self.phase3_size = config["ema_window_schedule"][2]
+
+    def get_window_size(self, step):
+        if isinstance(step, torch.Tensor):
+            step = step
+
+        # Phase 1: Static window
+        if step < self.phase1_steps:
+            return self.phase1_size
+        # Phase 2: Linear ramp
+        elif step < self.phase2_steps:
+            # progress = (step - self.phase1_steps) / max(1, self.phase2_steps - self.phase1_steps)
+            # return self.phase1_size + progress * (self.phase2_size - self.phase1_size)
+            return self.phase2_size
+        # Phase 3: Slow ramp
+        else:
+            # progress = (step - self.phase2_steps) / max(1, self.total_steps - self.phase2_steps)
+            # return self.phase2_size + progress * (self.phase3_size - self.phase2_size)
+            return self.phase3_size
+
+    def __call__(self, step):
+        return 1.0 - 1.0 / self.get_window_size(step)
+
+class FastAveragedModel(AveragedModel):
+    def __init__(self, model, alpha_fn):
+        super().__init__(model)
+        self.alpha_fn = alpha_fn
+        self._n = 0
+        self._ema_p = None
+
+    @torch.no_grad()
+    def update_parameters(self, model):
+        if self._ema_p is None:
+            self._ema_p = list(self.module.parameters())
+            self._cur_p = list(model.parameters())
+        if self._n == 0:
+            torch._foreach_copy_(self._ema_p, self._cur_p)
+        else:
+            torch._foreach_lerp_(self._ema_p, self._cur_p, 1.0 - self.alpha_fn(self._n))
+        self._n += 1
+        self.n_averaged.fill_(self._n)
+
+    def load_state_dict(self, *args, **kwargs):  # your plateau restore path
+        out = super().load_state_dict(*args, **kwargs)
+        self._n = int(self.n_averaged)
+        return out

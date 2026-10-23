@@ -84,7 +84,7 @@ config = {
     "validation_interval" : 500,
     "gamma":0.5,
     "label_smoothing":0,
-    "train_folds" : (0,),
+    "train_folds" : [0,1,2,3,4],
     "k_fold" : 5,
     "seed" : 1,
     "train_ratio" : 0.75,
@@ -99,10 +99,26 @@ config = {
     "training_fn" : "default", # chooses the training function
     "validation_fn" : "default",
     "ema_window_size": 0.998, # effective window size of the exponential moving average ~1000 = 0.999, ~500 = 0.998, ~100 = 0.99
+    "ema_schedule": [4000, 10000], # schedule for ema decay rate.
+    "ema_window_schedule": [100, 250, 5000], # window sizes for the Piecewise decay rate schedule
+    "ema_inverse_c": [(0, 20.0), (5_000, 20.0), (10_000, 10.0), (20_000, 5.0)],
+    "ema_inverse_target": 5000,
 }
 
+# c schedule 1: [(0, 20.0), (5_000, 20.0), (10_000, 10.0), (15_000, 5.0)]
+# c schedule 2: [(0, 20.0), (5_000, 20.0), (10_000, 10.0), (20_000, 5.0)]
+
+# schedule 1: [100, 500, 2000] [2000, 10000]
+# schedule 2: [100, 500, 3000] [3000, 10000]
+# schedule 3: [100, 500, 5000] [4000, 10000] best i think?
+# schedule 4: [100, 500, 5000] [2000, 13000]
+# schedule 5: [100, 1000, 5000] [4000, 10000] bad
+# schedule 6: [100, 250, 5000] [4000, 10000] also bad
+
+# best schedule [100, 500, 5000] [3000, 10000]
+
 scheduler_config = {
-    "patience" : 3 - 1, # marcel : 10, starts counting from 0
+    "patience" : 3, # marcel : 10, starts counting from 0
     "min_delta" : 0, # marcel : 0
     "threshold_mode" : "abs", # marcel : abs
     "factor" : 0.1,

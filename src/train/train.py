@@ -1,5 +1,3 @@
-### Refactored Script
-
 # standard imports
 import torch
 import numpy as np
@@ -25,7 +23,7 @@ import optimizer
 from train_config import (
     config, get_dataset_config, model_building_config, optimizer_config, scheduler_config, extra_losses
 )
-from train_utils import training_fn, validation_fn, log_metrics, lr_multiplier, validation_frequency, update_ema_batchnorm, EMAMultiAvgFn
+from train_utils import training_fn, validation_fn, log_metrics, lr_multiplier, validation_frequency, update_ema_batchnorm, EMAMultiAvgFn, InverseStepEMAFn,PiecewiseEMAFn, FastAveragedModel
 from early_stopping import EarlyStopSignal, EarlyStopOnPlateau
 from export import torch_save, torch_export_v2
 import marcel_weight_translation as mwt
@@ -38,35 +36,41 @@ def parse_arguments():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--datasets", required=True, type=lambda s: s.split(","), help="List of: dy, tt, kl0, kl1, kl2p45 or kl5")
-    parser.add_argument("--sample_ratio", required=True, type=parse_fraction, nargs="+", help="List of numbers. Must sum to 1.")
+    parser.add_argument("--sample-ratio", required=True, type=parse_fraction, nargs="+", help="List of numbers. Must sum to 1.")
     parser.add_argument("--modelname", required=True, help="Name of the model file it should save")
     parser.add_argument("--tbdestination", help="Destination folder. Ex.: --tbdestination destination  -->  tensorboard/destination")
     parser.add_argument("--eras", required=True, type=lambda s: s.split(","), help="eras included in the training: 22pre, 22post, 23pre, 23post")
     parser.add_argument("--seed", type=int, default=None, help="Set random seed for reproducibility")
-    parser.add_argument("--lr_range_test", type=bool, default=False, help="If true, starts a learning rate range test.")
+    parser.add_argument("--lr-range-test", type=bool, default=False, help="If true, starts a learning rate range test.")
     parser.add_argument("--scheduler", required=True, type=str, help=" plateau = ReduceOnPlateau, cosine = warmup + CosineAnnealing.")
-    parser.add_argument("--warmup_max", type=int, help="maximum number of warmup iterations.")
-    parser.add_argument("--max_iterations", type=int, help="maximum number of iterations.")
-    parser.add_argument("--disable_checkpoints", type=bool, default=False, help="enable/disable learningrate scheduler checkpoints.")
-    parser.add_argument("--disable_tensorboard", type=bool, default=False, help="enable/disable Tensorboard.")
-    parser.add_argument("--strength_param", type=float, default=1, help="Modifies the strength between the weight matrices.")
-    parser.add_argument("--only_one_weightmatrix", type=bool, default=False, help="Model trains with only one weightmatrix.")
-    parser.add_argument("--normalization_scheme", required=True, default="none", help="Options: 'none', 'global_sum', 'max_norm'.")
-    parser.add_argument("--mhh_weights", required=True, nargs=2, type=float, default=(1.0, 1.0), help="max and min event weight based on mhh.")
+    parser.add_argument("--warmup-max", type=int, help="maximum number of warmup iterations.")
+    parser.add_argument("--max-iterations", type=int, help="maximum number of iterations.")
+    parser.add_argument("--disable-checkpoints", type=bool, default=False, help="enable/disable learningrate scheduler checkpoints.")
+    parser.add_argument("--disable-tensorboard", type=bool, default=False, help="enable/disable Tensorboard.")
+    parser.add_argument("--strength-param", type=float, default=1, help="Modifies the strength between the weight matrices.")
+    parser.add_argument("--only-one-weightmatrix", type=bool, default=False, help="Model trains with only one weightmatrix.")
+    parser.add_argument("--normalization-scheme", required=True, default="none", help="Options: 'none', 'global_sum', 'max_norm'.")
+    parser.add_argument("--mhh-weights", required=True, nargs=2, type=float, default=(1.0, 1.0), help="max and min event weight based on mhh.")
     parser.add_argument("--exponential-moving-average", action="store_true", help="enable exponential moving average.")
     parser.add_argument("--metrics", required=True, type=lambda s: s.split(","), help="list of metrics to be recorded.")
+    parser.add_argument("--sampler-device", choices=["cpu", "gpu"], default="gpu", help="Where the datasets live during training. gpu: whole dataset in VRAM (fast, needs memory). cpu: original behaviour, batches assembled on the CPU.")
+
+    ema_decay_type = parser.add_mutually_exclusive_group(required=False)
+    ema_decay_type.add_argument("--piecewise-decay", action="store_true", help="add a piecewise schedule for the decay rate of the exponential moving average.")
+    ema_decay_type.add_argument("--inverse-decay", action="store_true", help="add a smooth schedule up to a target window size for the exponential moving average.")
+
 
     wm_A_group = parser.add_mutually_exclusive_group(required=True)
-    wm_A_group.add_argument("--weightmatrix_A", nargs="+", type=float, help="NxN matrix (true vs predicted).")
-    wm_A_group.add_argument("--diag_A", nargs="+", type=float, help="Diagonal matrix of the weight matrix A.")
+    wm_A_group.add_argument("--weightmatrix-A", nargs="+", type=float, help="NxN matrix (true vs predicted).")
+    wm_A_group.add_argument("--diag-A", nargs="+", type=float, help="Diagonal matrix of the weight matrix A.")
 
     wm_B_group = parser.add_mutually_exclusive_group(required=False)
-    wm_B_group.add_argument("--weightmatrix_B", nargs="+", type=float, help="NxN matrix for the kappa lambda classes.")
-    wm_B_group.add_argument("--diag_B", nargs="+", type=float, help="Diagonal matrix of the weight matrix B.")
+    wm_B_group.add_argument("--weightmatrix-B", nargs="+", type=float, help="NxN matrix for the kappa lambda classes.")
+    wm_B_group.add_argument("--diag-B", nargs="+", type=float, help="Diagonal matrix of the weight matrix B.")
 
     lr_group = parser.add_mutually_exclusive_group(required=True)
     lr_group.add_argument("--lr", type=float, help="Learning rate for the model training.")
-    lr_group.add_argument("--lr_range", type=float, nargs=2, help="Maximum and minimum learning rates.")
+    lr_group.add_argument("--lr-range", type=float, nargs=2, help="Maximum and minimum learning rates.")
 
     return parser.parse_args()
 
@@ -154,9 +158,25 @@ def run_lr_range_test(model, optimizer_inst, loss_fn, target_map, args, training
     plt.savefig(f"lr_range_tests/{args.modelname}.png")
     plt.close()
 
+def sizes(s):
+    t = dict(cont=0, cat=0, targets=0)
+    for per_type in s.dataset_inst.values():
+        for ds in per_type.values():
+            for k, x in (("cont", ds.continous_input), ("cat", ds.categorical_input), ("targets", ds.targets)):
+                t[k] += x.numel() * x.element_size()
+    return {k: f"{v / 1e9:.2f} GB" for k, v in t.items()}
 
-def train_fold(current_fold, args, dataset_config, target_map, device, logger, tboard_writer, hashed_model_name):
+def train_fold(current_fold, args, dataset_config, target_map, device, logger):
     logger.info(f'Start Training of fold {current_fold} from {config["k_fold"] - 1}')
+
+    # Tensorboard
+    tboard_writer = None
+    if not args.disable_tensorboard:
+        tboard_writer = TensorboardLogger(name=hash_config(config), model_name=f"{args.modelname}_fold{current_fold}", destination=args.tbdestination)
+        logger.warning(f"Tensorboard logs for fold {current_fold} are stored in {tboard_writer.path}")
+
+    hashed_model_name, config_hash = register_model(args, base_config=config, current_fold=current_fold)
+    config['save_model_name'] = hashed_model_name
 
     # 1. Data Preparation
     events = get_data(dataset_config, overwrite=False, _save_cache=True)
@@ -180,6 +200,21 @@ def train_fold(current_fold, args, dataset_config, target_map, device, logger, t
         training_sampler, padding_values=-99999, features=dataset_config["continous_features"], return_dummy=config["get_batch_statistic_return_dummy"],
     )
 
+    # cpu or gpu sampler
+    if args.sampler_device == "gpu" and device.type == "cuda":
+        training_sampler.to(device)
+        validation_sampler.to(device)
+        logger.info(f"Sampler data moved to {device}")
+    else:
+        if args.sampler_device == "gpu":
+            logger.warning("--sampler-device gpu requested but CUDA is not available; keeping the sampler on the CPU")
+        logger.info("Sampler data stays on the CPU")
+
+    # check sampler sizes
+    print("train", sizes(training_sampler))
+    print("val  ", sizes(validation_sampler))
+    print(torch.cuda.memory_allocated() / 1e9, torch.cuda.memory_reserved() / 1e9)
+
     # 2. Model Setup
     model = create_model.BNetLBNDenseNet(
         dataset_config["continous_features"], dataset_config["categorical_features"], target_map=target_map, config=model_building_config
@@ -189,10 +224,27 @@ def train_fold(current_fold, args, dataset_config, target_map, device, logger, t
         model, continous_features=dataset_config["continous_features"], with_std=config["load_marcel_stats"], with_weights=config["load_marcel_weights"]
     )
 
+    # Exponential Moving Average(EMA) block
     ema_model = None
+    ema_fn = None
+    adaptive_fn = None
     v_model = model
+
     if args.exponential_moving_average:
-        ema_model = AveragedModel(model, avg_fn=EMAMultiAvgFn(config["ema_window_size"]))
+        if args.piecewise_decay:
+            ema_fn = PiecewiseEMAFn(config, args.max_iterations)
+            logger.info("Exponential moving average of weights with a piecewise decay rate schedule enabled.")
+
+        elif args.inverse_decay:
+            ema_fn = InverseStepEMAFn(config)
+            logger.info("Exponential moving average of weights with inverse step decay rate schedule enabled.")
+
+        else:
+            decay = config["ema_window_size"]  # see note below
+            ema_fn = EMAMultiAvgFn(decay=decay)
+            logger.info("Exponential moving average of weights enabled")
+
+        ema_model = FastAveragedModel(model, alpha_fn=ema_fn)
         v_model = ema_model
 
     # 3. Optimizer & Scheduler Setup
@@ -241,14 +293,14 @@ def train_fold(current_fold, args, dataset_config, target_map, device, logger, t
     model.train()
     for current_iteration in range(max_iterations):
         t_loss, (t_pred, t_targets), *t_other_loss = training_fn(
-            model=model, ema_model=ema_model, loss_fn=loss_fn, optimizer=optimizer_inst,
+            model=model, ema_model=ema_model, ema_adaptive_fn=adaptive_fn, loss_fn=loss_fn, optimizer=optimizer_inst,
             target_map=target_map, strength_param=args.strength_param,
             only_one_weightmatrix=args.only_one_weightmatrix, sampler=training_sampler, device=device,
         )
 
-        if torch.isnan(t_loss):
-            print("NaN in batch loss")
-            from IPython import embed; embed(header=" string - NaN batch loss")
+        # if torch.isnan(t_loss):
+        #     print("NaN in batch loss")
+        #     from IPython import embed; embed(header=" string - NaN batch loss")
 
         if args.scheduler == 'cosine':
             scheduler_inst.step()
@@ -257,6 +309,7 @@ def train_fold(current_fold, args, dataset_config, target_map, device, logger, t
         if current_iteration % config["verbose_interval"] == 0:
             if not args.disable_tensorboard:
                 tboard_writer.log_loss({"batch_loss": t_loss.item()}, step=current_iteration)
+            print("----------------------------------------------------------------")
             print(f"Training: {current_iteration} - batch loss: {t_loss.item():.4f}")
 
             if args.scheduler == "cosine":
@@ -266,11 +319,18 @@ def train_fold(current_fold, args, dataset_config, target_map, device, logger, t
                     print(f"[WARMUP] {pct:6.2f}% of Max LR | LR: {current_lr:.2e}")
                 else:
                     print(f"[ANNEAL] LR: {current_lr:.2e}")
+
                 if not args.disable_tensorboard:
                     tboard_writer.log_lr(optimizer_inst.param_groups[0]["lr"], step=current_iteration)
 
+                if ema_fn:
+                    current_window = ema_fn.get_window_size(current_iteration)
+                    current_alpha = 1.0 - (1.0 / current_window)
+                    print(f"EMA Window: {current_window:6.1f} steps | Alpha: {current_alpha:.6f}")
+
         # Validation Step
         if (current_iteration % val_frequency(current_iteration) == 0) and current_iteration != 0:
+            print("----------------------------------------------------------------")
             print(f"Running evaluation of training data at iteration {current_iteration}...")
 
             if ema_model:
@@ -308,7 +368,7 @@ def train_fold(current_fold, args, dataset_config, target_map, device, logger, t
                     target_map=target_map, metric_logging=args.metrics, mode="validation", loss=eval_v_loss.item(), other_loss=eval_v_other_loss,
                 )
 
-            print(f"Evaluation: it: {current_iteration} - TLoss: {eval_t_loss:.4f} VLoss: {eval_v_loss:.4f}")
+            print(f"Evaluation: iteration: {current_iteration} - TLoss: {eval_t_loss:.4f} VLoss: {eval_v_loss:.4f}")
 
             # Scheduler step and checkpointing (Plateau)
             if args.scheduler == 'plateau':
@@ -318,7 +378,7 @@ def train_fold(current_fold, args, dataset_config, target_map, device, logger, t
                 new_lr = optimizer_inst.param_groups[0]['lr']
 
                 if not args.disable_checkpoints and previous_lr > new_lr:
-                    print("validation did not improve, restoring weights of best validation and reducing LR.")
+                    logger.info("validation did not improve, restoring weights of best validation and reducing LR.")
                     v_model.load_state_dict(model_checkpoint["model_state"])
                     optimizer_inst.load_state_dict(model_checkpoint["optimizer_state"])
                     for g in optimizer_inst.param_groups:
@@ -335,16 +395,24 @@ def train_fold(current_fold, args, dataset_config, target_map, device, logger, t
                 early_stopping_counter = 0
             else:
                 early_stopping_counter += 1
-                print(f"validation loss did not improve for {early_stopping_counter} validations.")
+                logger.info(f"validation loss did not improve for {early_stopping_counter} validations.")
 
             if args.scheduler == 'plateau' and early_stopping_counter == 3 * scheduler_config["patience"]:
-                print("validation loss has not improved for patience limit. Stopping training.")
-                print(f"{config['save_model_name']} | model hash: {hashed_model_name}")
+                logger.info("validation loss has not improved for patience limit. Stopping training.")
+                logger.info(f"{config['save_model_name']} | model hash: {hashed_model_name}")
                 break
 
-        if current_iteration == max_iterations - 1:
-            print("end of training loop reached.")
-            print(f"{config['save_model_name']} | model hash: {hashed_model_name}")
+            if args.scheduler == 'cosine' and early_stopping_counter == 5:
+                logger.info('validation loss hasnt improved for patience limit. Stopping training.')
+                logger.info(f"{config['save_model_name']} | model hash: {hashed_model_name}")
+                break
+
+    if current_iteration == max_iterations - 1:
+        logger.info("end of training loop reached.")
+        logger.info(f"{config['save_model_name']} | model hash: {hashed_model_name}")
+
+    if tboard_writer is not None and hasattr(tboard_writer, "close"):
+        tboard_writer.close()
 
 
 def main():
@@ -357,8 +425,6 @@ def main():
 
     # Pre-flight Configuration
     set_seed(args.seed)
-    hashed_model_name, config_hash = register_model(args, base_config=config)
-    config['save_model_name'] = hashed_model_name
 
     dataset_config = get_dataset_config(args.datasets, args.eras)
     target_map = dataset_config['target_map']
@@ -371,12 +437,6 @@ def main():
     for key, value in config['sample_ratio'].items():
         print(f"{key}: {value:.3f}")
 
-    # Tensorboard
-    tboard_writer = None
-    if not args.disable_tensorboard:
-        tboard_writer = TensorboardLogger(name=hash_config(config), model_name=args.modelname, destination=args.tbdestination)
-        logger.warning(f"Tensorboard logs are stored in {tboard_writer.path}")
-
     # K-fold Iteration
     for current_fold in config["train_folds"]:
         train_fold(
@@ -386,8 +446,6 @@ def main():
             target_map=target_map,
             device=device,
             logger=logger,
-            tboard_writer=tboard_writer,
-            hashed_model_name=hashed_model_name
         )
 
 
